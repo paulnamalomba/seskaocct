@@ -7,7 +7,7 @@
 #   - Mutating actions (branch, add, commit, push, tag) need an attached branch and -Yes.
 #     commit needs everything staged (no unstaged or untracked paths).
 #     push and tag need a clean tree. There are no interactive prompts.
-#   - push targets only paulnamalomba/OCCT. Open-Cascade-SAS/OCCT is a read/fetch reference and is never a target.
+#   - push targets only paulnamalomba/seskaocct. Open-Cascade-SAS/OCCT is a read/fetch reference and is never a target.
 #   - tag creates an annotated tag native/v<internal version> and pushes only that tag.
 #     It needs .commits/builds/<version>.json (accepted, status passed, source_commit) and a
 #     family note that records the version. The unbuilt seed therefore cannot be tagged.
@@ -44,7 +44,7 @@ $ErrorActionPreference = 'Stop'
 # ---- Repository configuration (the only part that differs between owned repositories) ----
 $script:Product = 'OCCT native fork'
 $script:VersionFile = 'OCCT_INTERNAL_VERSION'
-$script:ExpectedRepository = 'github.com/paulnamalomba/OCCT'
+$script:ExpectedRepository = 'github.com/paulnamalomba/seskaocct'
 $script:BuildTagPrefix = 'native/v'
 $script:VersionPattern = '^(0|[1-9]\d*)\.([0-9])\.([0-9])\.([0-9])$'
 $script:MultiDigitFirstField = $true
@@ -360,7 +360,7 @@ function Invoke-SelfCheck {
     foreach ($url in @("https://$own", "https://$own.git", "https://$own/", ('git@' + ([regex]'/').Replace($own, ':', 1) + '.git'), "ssh://git@$own.git", "https://$($own.ToUpperInvariant())")) {
         & $add "remote accepts $url" ((ConvertTo-NormalizedRemote $url) -eq $own)
     }
-    foreach ($url in @("https://token@$own", "http://$own", 'https://github.com/Open-Cascade-SAS/OCCT', 'https://github.com/FreeCAD/FreeCAD.git', 'DISABLED-upstream-is-read-only', "https://$own-evil")) {
+    foreach ($url in @("https://token@$own", "http://$own", 'https://github.com/Open-Cascade-SAS/OCCT', 'https://github.com/paulnamalomba/OCCT.git', 'https://github.com/FreeCAD/FreeCAD.git', 'DISABLED-upstream-is-read-only', "https://$own-evil")) {
         & $add "remote rejects $url" ((ConvertTo-NormalizedRemote $url) -ne $own)
     }
 

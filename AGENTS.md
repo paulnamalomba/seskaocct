@@ -2,15 +2,15 @@
 
 Rules for people and coding agents working in this repository.
 
-## Owned fork contract
+## Owned repository contract
 
-This repository is the user's public fork [paulnamalomba/OCCT](https://github.com/paulnamalomba/OCCT) of Open CASCADE Technology (OCCT). SESKAFEA's frontend geometry workers (kernel, STEP and IGES translation) build OCCT from an exact commit of this fork. The commit is pinned with the SHA-256 of its GitHub archive in the frontend's `cmake/FrontendDependencies.json`. All intentional OCCT source changes for SESKAFEA belong here as reviewed commits, never as patch files hidden in consumer build scripts. Publish a fork commit before a consumer pins it.
+This repository is the user's public, independently maintained copy [paulnamalomba/seskaocct](https://github.com/paulnamalomba/seskaocct) of Open CASCADE Technology (OCCT). It was renamed from `paulnamalomba/OCCT` on 10 November 2026 and detached from the GitHub fork network, so it is a standalone repository. SESKAFEA's frontend geometry workers (kernel, STEP and IGES translation) build OCCT from an exact commit of this repository. The commit is pinned with the SHA-256 of its GitHub archive in the frontend's `cmake/FrontendDependencies.json`. All intentional OCCT source changes for SESKAFEA belong here as reviewed commits, never as patch files hidden in consumer build scripts. Publish a commit here before a consumer pins it.
 
-**Required (user, 3 November 2026):** the fork is public and independently maintained, and upstream `Open-Cascade-SAS/OCCT` is a read/fetch reference only:
+**Required (user, 3 November 2026; renamed and detached 10 November 2026):** this repository is public and independently maintained, and upstream `Open-Cascade-SAS/OCCT` is a read/fetch reference only:
 
 - Do not configure a push URL for upstream.
 - Do not push branches or tags upstream, and do not open pull requests, issues or comments there.
-- GitHub records this repository as a fork, so tools may default to the upstream base. Every push, and any pull request the user asks for, must explicitly target `paulnamalomba/OCCT`. Create pull requests only when the user asks.
+- This is an independently maintained copy with upstream as a read/fetch reference. Every push, and any pull request the user asks for, must explicitly target `paulnamalomba/seskaocct`. Create pull requests only when the user asks.
 
 ### Branches
 
@@ -42,7 +42,7 @@ This repository is the user's public fork [paulnamalomba/OCCT](https://github.co
 - Do not encode the internal identity into upstream's `OCC_VERSION_*` macros.
 - Group notes by the first three fields in Markdown: `.commits/<breaking>.<major>.<minor>.md`, so the 8.0.1 family shares [.commits/8.0.1.md](.commits/8.0.1.md). Use the `create-commit-notes` skill at seed initialization and at every minor, major or breaking change, including carries. Append every accepted build. Never collapse or rewrite earlier transitions.
 - Each accepted build gets `.commits/builds/<version>.json` and a family-note record. The build record holds `accepted`, `status`, `source_commit` (the 40-character fork commit that the consumer built), checks with results, artifact or archive hashes and remaining limits. Persist the accepted version and its record in the same change. This record layout is Proposed.
-- `.commits/manage-repo.ps1` reads `OCCT_INTERNAL_VERSION` and never changes it. Any `-Version` must equal it. Mutating actions require an attached branch, a clean tree and `-Yes`. Pushes target only `paulnamalomba/OCCT`. Tags use the `native/v<internal version>` namespace and are never replaced. Run `pwsh -NoProfile -File .commits/manage-repo.ps1 -Action check` for its self-checks, and add `-WhatIf` to preview a mutating action.
+- `.commits/manage-repo.ps1` reads `OCCT_INTERNAL_VERSION` and never changes it. Any `-Version` must equal it. Mutating actions require an attached branch, a clean tree and `-Yes`. Pushes target only `paulnamalomba/seskaocct`. Tags use the `native/v<internal version>` namespace and are never replaced. Run `pwsh -NoProfile -File .commits/manage-repo.ps1 -Action check` for its self-checks, and add `-WhatIf` to preview a mutating action.
 ### Change register
 
 | Commit subject | Files | Evidence |
