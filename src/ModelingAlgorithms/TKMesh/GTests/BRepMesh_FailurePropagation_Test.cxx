@@ -15,15 +15,27 @@
 // Standard_OutOfMemory propagates out of BRepMesh_IncrementalMesh::Perform(),
 // and any other Standard_Failure caught during meshing sets IMeshData_Failure.
 
+#include <BRep_Builder.hxx>
+#include <BRep_CurveRepresentation.hxx>
+#include <BRep_TEdge.hxx>
+#include <BRep_TFace.hxx>
 #include <BRep_Tool.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepMesh_Context.hxx>
 #include <BRepMesh_DelaunayBaseMeshAlgo.hxx>
+#include <BRepMesh_EdgeDiscret.hxx>
 #include <BRepMesh_FaceDiscret.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepMesh_ModelBuilder.hxx>
+#include <BRepMesh_ModelPostProcessor.hxx>
+#include <BRepMesh_ModelPreProcessor.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Trsf.hxx>
 #include <IMeshData_Curve.hxx>
 #include <IMeshData_Edge.hxx>
+#include <IMeshData_Face.hxx>
 #include <IMeshData_Model.hxx>
 #include <IMeshData_Status.hxx>
 #include <IMeshTools_MeshAlgoFactory.hxx>
@@ -42,12 +54,16 @@
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
 
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cstdint>
+#include <functional>
 #include <new>
+#include <vector>
 
 namespace
 {
@@ -105,6 +121,9 @@ public:
     const bool isFailing   = myFailingAlgo < 0 || anAlgoIndex == myFailingAlgo;
     return new FailingMeshAlgo(isFailing, myIsOutOfMemory);
   }
+
+  //! Returns the number of algorithms requested so far.
+  int AlgosNb() const { return myAlgosNb.load(); }
 
 private:
   bool                     myIsOutOfMemory;
@@ -330,6 +349,287 @@ int triangulatedFacesNb(const TopoDS_Shape& theShape)
   return aNb;
 }
 
+//! Model algorithm that does nothing and succeeds.
+class PassingModelAlgo : public IMeshTools_ModelAlgo
+{
+protected:
+  bool performInternal(const occ::handle<IMeshData_Model>&,
+                       const IMeshTools_Parameters&,
+                       const Message_ProgressRange&) override
+  {
+    return true;
+  }
+};
+
+//! Runs the given model algorithm, calls the observer, then runs out of memory.
+class ThrowingAfterAlgo : public IMeshTools_ModelAlgo
+{
+public:
+  ThrowingAfterAlgo(const occ::handle<IMeshTools_ModelAlgo>& theAlgo,
+                    const bool                               theIsBadAlloc,
+                    const std::function<void()>&             theObserver)
+      : myAlgo(theAlgo),
+        myIsBadAlloc(theIsBadAlloc),
+        myObserver(theObserver)
+  {
+  }
+
+protected:
+  bool performInternal(const occ::handle<IMeshData_Model>& theModel,
+                       const IMeshTools_Parameters&        theParameters,
+                       const Message_ProgressRange&        theRange) override
+  {
+    myAlgo->Perform(theModel, theParameters, theRange);
+    myObserver();
+    if (myIsBadAlloc)
+    {
+      throw std::bad_alloc();
+    }
+    throw Standard_OutOfMemory("injected out-of-memory condition");
+  }
+
+private:
+  occ::handle<IMeshTools_ModelAlgo> myAlgo;
+  bool                              myIsBadAlloc;
+  std::function<void()>             myObserver;
+};
+
+//! Context whose post-processing stage completes and then throws std::bad_alloc
+//! outside any model algorithm.
+class BadAllocAfterPostProcessContext : public BRepMesh_Context
+{
+public:
+  bool PostProcessModel() override
+  {
+    BRepMesh_Context::PostProcessModel();
+    throw std::bad_alloc();
+  }
+};
+
+//! Discrete model passing every call to another model; access to a face runs out of
+//! memory once the model is armed.
+class ArmableModel : public IMeshData_Model
+{
+public:
+  explicit ArmableModel(const occ::handle<IMeshData_Model>& theModel)
+      : IMeshData_Model(theModel->GetShape()),
+        myModel(theModel)
+  {
+  }
+
+  void Arm() { myIsArmed = true; }
+
+  double GetMaxSize() const override { return myModel->GetMaxSize(); }
+
+  int FacesNb() const override { return myModel->FacesNb(); }
+
+  const IMeshData::IFaceHandle& AddFace(const TopoDS_Face& theFace) override
+  {
+    return myModel->AddFace(theFace);
+  }
+
+  const IMeshData::IFaceHandle& GetFace(const int theIndex) const override
+  {
+    if (myIsArmed)
+    {
+      throw Standard_OutOfMemory("injected out-of-memory condition");
+    }
+    return myModel->GetFace(theIndex);
+  }
+
+  int EdgesNb() const override { return myModel->EdgesNb(); }
+
+  const IMeshData::IEdgeHandle& AddEdge(const TopoDS_Edge& theEdge) override
+  {
+    return myModel->AddEdge(theEdge);
+  }
+
+  const IMeshData::IEdgeHandle& GetEdge(const int theIndex) const override
+  {
+    return myModel->GetEdge(theIndex);
+  }
+
+private:
+  occ::handle<IMeshData_Model> myModel;
+  bool                         myIsArmed = false;
+};
+
+//! Builds the default discrete model wrapped into ArmableModel.
+class ArmableModelBuilder : public IMeshTools_ModelBuilder
+{
+protected:
+  occ::handle<IMeshData_Model> performInternal(const TopoDS_Shape&          theShape,
+                                               const IMeshTools_Parameters& theParameters) override
+  {
+    occ::handle<IMeshTools_ModelBuilder> aBuilder = new BRepMesh_ModelBuilder();
+    occ::handle<IMeshData_Model>         aModel   = aBuilder->Perform(theShape, theParameters);
+    if (aModel.IsNull())
+    {
+      return aModel;
+    }
+    return new ArmableModel(aModel);
+  }
+};
+
+//! Discretizes the edges with the default algorithm, then arms ArmableModel
+//! or flags the first edge as failed.
+class EdgeDiscretWithAftermath : public IMeshTools_ModelAlgo
+{
+public:
+  explicit EdgeDiscretWithAftermath(const bool theToFailFirstEdge)
+      : myToFailFirstEdge(theToFailFirstEdge)
+  {
+  }
+
+protected:
+  bool performInternal(const occ::handle<IMeshData_Model>& theModel,
+                       const IMeshTools_Parameters&        theParameters,
+                       const Message_ProgressRange&        theRange) override
+  {
+    occ::handle<IMeshTools_ModelAlgo> anAlgo = new BRepMesh_EdgeDiscret();
+    const bool                        isDone = anAlgo->Perform(theModel, theParameters, theRange);
+    if (myToFailFirstEdge)
+    {
+      theModel->GetEdge(0)->SetStatus(IMeshData_Failure);
+    }
+    else if (ArmableModel* aModel = dynamic_cast<ArmableModel*>(theModel.get()))
+    {
+      aModel->Arm();
+    }
+    return isDone;
+  }
+
+private:
+  bool myToFailFirstEdge;
+};
+
+//! Identity of the mesh data of a shape: triangulations of the faces, with the active one
+//! and its purpose flags, and curve representations of the edges with their polygons.
+struct MeshState
+{
+  std::vector<std::uintptr_t> Values;
+
+  //! Keeps the objects alive, so that an address is not used again by another object.
+  std::vector<occ::handle<Standard_Transient>> Objects;
+
+  void Add(const occ::handle<Standard_Transient>& theObject)
+  {
+    Values.push_back(reinterpret_cast<std::uintptr_t>(theObject.get()));
+    Objects.push_back(theObject);
+  }
+
+  bool operator==(const MeshState& theOther) const { return Values == theOther.Values; }
+};
+
+//! Returns the mesh data of the faces and edges of the shape.
+MeshState meshState(const TopoDS_Shape& theShape)
+{
+  MeshState aState;
+  for (TopExp_Explorer anExp(theShape, TopAbs_FACE); anExp.More(); anExp.Next())
+  {
+    const occ::handle<BRep_TFace> aTFace = occ::down_cast<BRep_TFace>(anExp.Current().TShape());
+    const occ::handle<Poly_Triangulation>& anActive = aTFace->ActiveTriangulation();
+    aState.Values.push_back(aTFace->NbTriangulations());
+    aState.Add(anActive);
+    aState.Values.push_back(anActive.IsNull() ? 0 : anActive->MeshPurpose());
+    for (NCollection_List<occ::handle<Poly_Triangulation>>::Iterator anIt(
+           aTFace->Triangulations());
+         anIt.More();
+         anIt.Next())
+    {
+      aState.Add(anIt.Value());
+    }
+  }
+
+  for (TopExp_Explorer anExp(theShape, TopAbs_EDGE); anExp.More(); anExp.Next())
+  {
+    const occ::handle<BRep_TEdge> aTEdge = occ::down_cast<BRep_TEdge>(anExp.Current().TShape());
+    aState.Values.push_back(aTEdge->Curves().Size());
+    for (NCollection_List<occ::handle<BRep_CurveRepresentation>>::Iterator anIt(aTEdge->Curves());
+         anIt.More();
+         anIt.Next())
+    {
+      const occ::handle<BRep_CurveRepresentation>& aCurve = anIt.Value();
+      if (aCurve->IsPolygon3D())
+      {
+        aState.Values.push_back(1);
+        aState.Add(aCurve->Polygon3D());
+      }
+      else if (aCurve->IsPolygonOnTriangulation())
+      {
+        aState.Values.push_back(aCurve->IsPolygonOnClosedTriangulation() ? 3 : 2);
+        aState.Add(aCurve->Triangulation());
+        aState.Add(aCurve->PolygonOnTriangulation());
+        if (aCurve->IsPolygonOnClosedTriangulation())
+        {
+          aState.Add(aCurve->PolygonOnTriangulation2());
+        }
+      }
+      else if (aCurve->IsPolygonOnSurface())
+      {
+        aState.Values.push_back(4);
+        aState.Add(aCurve->Polygon());
+      }
+      else
+      {
+        // A representation without mesh data is not replaced at all.
+        aState.Values.push_back(0);
+        aState.Add(aCurve);
+      }
+    }
+  }
+  return aState;
+}
+
+//! Returns a compound of a cylinder, the same cylinder at another location and a free
+//! circular edge, so that the mesh depends on the deflection and a TShape is met twice.
+TopoDS_Shape cylindersWithFreeEdge()
+{
+  const TopoDS_Shape aCylinder = BRepPrimAPI_MakeCylinder(10.0, 20.0).Shape();
+  gp_Trsf            aMove;
+  aMove.SetTranslation(gp_Vec(100.0, 0.0, 0.0));
+
+  TopoDS_Compound aCompound;
+  BRep_Builder    aBuilder;
+  aBuilder.MakeCompound(aCompound);
+  aBuilder.Add(aCompound, aCylinder);
+  aBuilder.Add(aCompound, aCylinder.Moved(TopLoc_Location(aMove)));
+  aBuilder.Add(aCompound,
+               BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(0.0, 50.0, 0.0), gp::DZ()), 10.0))
+                 .Edge());
+  return aCompound;
+}
+
+//! Meshes the shape sequentially with the given context and linear deflection.
+void meshWithDeflection(BRepMesh_IncrementalMesh&              theMesher,
+                        const TopoDS_Shape&                    theShape,
+                        const occ::handle<IMeshTools_Context>& theContext,
+                        const double                           theDeflection)
+{
+  theMesher.SetShape(theShape);
+  theMesher.ChangeParameters()            = sequentialParameters();
+  theMesher.ChangeParameters().Deflection = theDeflection;
+  theMesher.Perform(theContext);
+}
+
+//! Sets the algorithm that runs the default pre- or post-processor and then runs out of memory.
+void setThrowingStage(const occ::handle<BRepMesh_Context>& theContext,
+                      const bool                           theIsPreProcessor,
+                      const bool                           theIsBadAlloc,
+                      const std::function<void()>&         theObserver)
+{
+  if (theIsPreProcessor)
+  {
+    theContext->SetPreProcessor(
+      new ThrowingAfterAlgo(new BRepMesh_ModelPreProcessor(), theIsBadAlloc, theObserver));
+  }
+  else
+  {
+    theContext->SetPostProcessor(
+      new ThrowingAfterAlgo(new BRepMesh_ModelPostProcessor(), theIsBadAlloc, theObserver));
+  }
+}
+
 } // namespace
 
 TEST(BRepMesh_FailurePropagationTest, FaceMeshingOutOfMemoryReachesCaller)
@@ -398,10 +698,14 @@ TEST(BRepMesh_FailurePropagationTest, StateAfterFaceMeshingOutOfMemory)
   ASSERT_EQ(0, aMesher.GetStatusFlags());
 
   // The fourth face runs out of memory after three faces have been meshed.
-  const TopoDS_Shape            aBox     = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
-  occ::handle<BRepMesh_Context> aContext = new BRepMesh_Context();
-  aContext->SetFaceDiscret(new BRepMesh_FaceDiscret(new FailingMeshAlgoFactory(true, 3)));
+  const TopoDS_Shape                  aBox     = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
+  occ::handle<FailingMeshAlgoFactory> aFactory = new FailingMeshAlgoFactory(true, 3);
+  occ::handle<BRepMesh_Context>       aContext = new BRepMesh_Context();
+  aContext->SetFaceDiscret(new BRepMesh_FaceDiscret(aFactory));
   EXPECT_THROW(meshWithContext(aMesher, aBox, aContext), Standard_OutOfMemory);
+
+  // The faces after the failed one are skipped: no algorithm is requested for them.
+  EXPECT_EQ(4, aFactory->AlgosNb());
 
   // No partial triangulation is left on the shape.
   EXPECT_EQ(0, triangulatedFacesNb(aBox));
@@ -599,6 +903,14 @@ TEST(BRepMesh_FailurePropagationTest, FaceMeshingBadAllocReachesCallerAsOutOfMem
       << "In parallel: " << isInParallel;
     EXPECT_EQ(0, triangulatedFacesNb(aBox));
     EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
+
+    // The face that ran out of memory is flagged, as for Standard_OutOfMemory.
+    int aFailedFacesNb = 0;
+    for (int aFaceIt = 0; aFaceIt < aContext->GetModel()->FacesNb(); ++aFaceIt)
+    {
+      aFailedFacesNb += aContext->GetModel()->GetFace(aFaceIt)->IsSet(IMeshData_Failure) ? 1 : 0;
+    }
+    EXPECT_GE(aFailedFacesNb, 1) << "In parallel: " << isInParallel;
   }
 }
 
@@ -623,5 +935,192 @@ TEST(BRepMesh_FailurePropagationTest, ModelAlgoBadAllocReachesCallerAsOutOfMemor
 
   BRepMesh_IncrementalMesh aMesher;
   EXPECT_THROW(meshWithContext(aMesher, aBox, aContext), Standard_OutOfMemory);
+  EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
+}
+
+// A re-meshing run that runs out of memory leaves the previous mesh on the shape:
+// every triangulation and every polygon is the one that the shape had before the run.
+TEST(BRepMesh_FailurePropagationTest, OutOfMemoryRestoresPreviousMesh)
+{
+  for (const bool isPreProcessor : {true, false})
+  {
+    for (const bool isBadAlloc : {false, true})
+    {
+      SCOPED_TRACE(TCollection_AsciiString(isPreProcessor ? "pre-processor" : "post-processor")
+                     .Cat(isBadAlloc ? ", std::bad_alloc" : ", Standard_OutOfMemory")
+                     .ToCString());
+      const TopoDS_Shape aShape = cylindersWithFreeEdge();
+
+      BRepMesh_IncrementalMesh aMesher;
+      meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.5);
+      ASSERT_TRUE(aMesher.IsDone());
+      ASSERT_EQ(0, aMesher.GetStatusFlags());
+      ASSERT_EQ(6, triangulatedFacesNb(aShape));
+      const MeshState aCoarse = meshState(aShape);
+
+      MeshState                     aChanged;
+      occ::handle<BRepMesh_Context> aContext = new BRepMesh_Context();
+      setThrowingStage(aContext, isPreProcessor, isBadAlloc, [&aChanged, &aShape]() {
+        aChanged = meshState(aShape);
+      });
+      EXPECT_THROW(meshWithDeflection(aMesher, aShape, aContext, 0.01), Standard_OutOfMemory);
+
+      // The stage has changed the mesh on the shape before the failure.
+      EXPECT_FALSE(aChanged.Values.empty());
+      EXPECT_FALSE(aChanged == aCoarse);
+
+      EXPECT_TRUE(meshState(aShape) == aCoarse);
+      EXPECT_FALSE(aMesher.IsDone());
+      EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
+
+      // The restored mesh is accepted as it is by a run with the first deflection,
+      // and a run with the second one replaces it.
+      meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.5);
+      EXPECT_TRUE(aMesher.IsDone());
+      EXPECT_EQ(int(IMeshData_Reused), aMesher.GetStatusFlags());
+      EXPECT_TRUE(meshState(aShape) == aCoarse);
+
+      meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.01);
+      EXPECT_TRUE(aMesher.IsDone());
+      EXPECT_EQ(int(IMeshData_Outdated), aMesher.GetStatusFlags());
+      EXPECT_FALSE(meshState(aShape) == aCoarse);
+    }
+  }
+}
+
+// A context without the default pre-processor keeps the outdated polygons on the edges, so
+// the post-processor changes the 3D polygon of the free edge inside its representation.
+// The previous polygon is restored all the same.
+TEST(BRepMesh_FailurePropagationTest, OutOfMemoryRestoresPolygonChangedInPlace)
+{
+  const TopoDS_Shape aShape = cylindersWithFreeEdge();
+
+  BRepMesh_IncrementalMesh aMesher;
+  meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.5);
+  ASSERT_EQ(0, aMesher.GetStatusFlags());
+  const MeshState aCoarse = meshState(aShape);
+
+  MeshState                     aChanged;
+  occ::handle<BRepMesh_Context> aContext = new BRepMesh_Context();
+  aContext->SetPreProcessor(new PassingModelAlgo());
+  setThrowingStage(aContext, false, false, [&aChanged, &aShape]() {
+    aChanged = meshState(aShape);
+  });
+  EXPECT_THROW(meshWithDeflection(aMesher, aShape, aContext, 0.01), Standard_OutOfMemory);
+  EXPECT_FALSE(aChanged == aCoarse);
+  EXPECT_TRUE(meshState(aShape) == aCoarse);
+
+  meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.5);
+  EXPECT_EQ(int(IMeshData_Reused), aMesher.GetStatusFlags());
+  EXPECT_TRUE(meshState(aShape) == aCoarse);
+}
+
+// A first meshing run that runs out of memory after the polygons and triangulations
+// have been stored leaves the shape without any mesh data.
+TEST(BRepMesh_FailurePropagationTest, OutOfMemoryOnFirstRunLeavesNoMesh)
+{
+  const TopoDS_Shape aShape   = cylindersWithFreeEdge();
+  const MeshState    aInitial = meshState(aShape);
+
+  MeshState                     aChanged;
+  occ::handle<BRepMesh_Context> aContext = new BRepMesh_Context();
+  setThrowingStage(aContext, false, false, [&aChanged, &aShape]() {
+    aChanged = meshState(aShape);
+  });
+
+  BRepMesh_IncrementalMesh aMesher;
+  EXPECT_THROW(meshWithDeflection(aMesher, aShape, aContext, 0.5), Standard_OutOfMemory);
+  EXPECT_FALSE(aChanged == aInitial);
+  EXPECT_TRUE(meshState(aShape) == aInitial);
+  EXPECT_EQ(0, triangulatedFacesNb(aShape));
+  EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
+}
+
+// std::bad_alloc that reaches BRepMesh_IncrementalMesh as it is (thrown by a context,
+// outside any model algorithm) is reported like Standard_OutOfMemory.
+TEST(BRepMesh_FailurePropagationTest, BadAllocFromContextReachesCallerAsOutOfMemory)
+{
+  const TopoDS_Shape aShape = cylindersWithFreeEdge();
+
+  BRepMesh_IncrementalMesh aMesher;
+  meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.5);
+  ASSERT_EQ(0, aMesher.GetStatusFlags());
+  const MeshState aCoarse = meshState(aShape);
+
+  EXPECT_THROW(meshWithDeflection(aMesher, aShape, new BadAllocAfterPostProcessContext(), 0.01),
+               Standard_OutOfMemory);
+  EXPECT_TRUE(meshState(aShape) == aCoarse);
+  EXPECT_FALSE(aMesher.IsDone());
+  EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
+}
+
+// BRepMesh_FaceDiscret alone, without BRepMesh_IncrementalMesh, puts back the triangulations
+// that the faces had when it started. The pre-processor is replaced, so that the faces
+// keep their triangulations until BRepMesh_FaceDiscret meshes them again.
+TEST(BRepMesh_FailurePropagationTest, FaceDiscretRestoresTriangulationsOnOutOfMemory)
+{
+  const TopoDS_Shape       aBox = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
+  BRepMesh_IncrementalMesh aMesher;
+  meshWithContext(aMesher, aBox, new BRepMesh_Context());
+  ASSERT_EQ(6, triangulatedFacesNb(aBox));
+  const MeshState aFirst = meshState(aBox);
+
+  occ::handle<FailingMeshAlgoFactory> aFactory = new FailingMeshAlgoFactory(true, 3);
+  occ::handle<BRepMesh_Context>       aContext = new BRepMesh_Context();
+  aContext->SetShape(aBox);
+  aContext->ChangeParameters()                    = sequentialParameters();
+  aContext->ChangeParameters().DeflectionInterior = 0.1;
+  aContext->ChangeParameters().AngleInterior      = 1.0;
+  aContext->ChangeParameters().MinSize            = 1.0e-4;
+  aContext->SetPreProcessor(new PassingModelAlgo());
+  aContext->SetFaceDiscret(new BRepMesh_FaceDiscret(aFactory));
+
+  IMeshTools_MeshBuilder aBuilder(aContext);
+  EXPECT_THROW(aBuilder.Perform(Message_ProgressRange()), Standard_OutOfMemory);
+
+  // Three faces were meshed again before the fourth one failed.
+  EXPECT_EQ(4, aFactory->AlgosNb());
+  EXPECT_EQ(6, triangulatedFacesNb(aBox));
+  EXPECT_TRUE(meshState(aBox) == aFirst);
+}
+
+// A shape with a free edge only: the failure of the edge reaches the mesher status,
+// although no face and no stage reports it.
+TEST(BRepMesh_FailurePropagationTest, FreeEdgeFailureSetsMesherFailureStatus)
+{
+  TopoDS_Compound aCompound;
+  BRep_Builder    aShapeBuilder;
+  aShapeBuilder.MakeCompound(aCompound);
+  aShapeBuilder.Add(aCompound,
+                    BRepBuilderAPI_MakeEdge(gp_Pnt(0.0, 0.0, 0.0), gp_Pnt(1.0, 0.0, 0.0)).Edge());
+
+  occ::handle<BRepMesh_Context> aContext = new BRepMesh_Context();
+  aContext->SetEdgeDiscret(new EdgeDiscretWithAftermath(true));
+
+  BRepMesh_IncrementalMesh aMesher;
+  ASSERT_NO_THROW(meshWithContext(aMesher, aCompound, aContext));
+
+  const occ::handle<IMeshData_Model>& aModel = aContext->GetModel();
+  ASSERT_FALSE(aModel.IsNull());
+  ASSERT_EQ(0, aModel->FacesNb());
+  ASSERT_EQ(1, aModel->EdgesNb());
+  EXPECT_TRUE(aMesher.IsDone());
+  EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
+}
+
+// BRepMesh_ModelHealer does not keep a link to the model when it runs out of memory.
+TEST(BRepMesh_FailurePropagationTest, ModelHealerReleasesModelOnOutOfMemory)
+{
+  const TopoDS_Shape aBox = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
+
+  // The default healer of the context fails at its first access to a face of the model.
+  occ::handle<BRepMesh_Context> aContext = new BRepMesh_Context();
+  aContext->SetModelBuilder(new ArmableModelBuilder());
+  aContext->SetEdgeDiscret(new EdgeDiscretWithAftermath(false));
+
+  BRepMesh_IncrementalMesh aMesher;
+  EXPECT_THROW(meshWithContext(aMesher, aBox, aContext), Standard_OutOfMemory);
+  ASSERT_FALSE(aContext->GetModel().IsNull());
+  EXPECT_EQ(1, aContext->GetModel()->GetRefCount());
   EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
 }

@@ -120,6 +120,9 @@ public:
   }
 
   //! Cleans temporary context data.
+  //! An override must not throw: IMeshTools_MeshBuilder::Perform() calls this method on every
+  //! exit path, also while an exception such as Standard_OutOfMemory is passed to the caller,
+  //! and an exception thrown at that point terminates the program.
   virtual void Clean()
   {
     if (myParameters.CleanModel)

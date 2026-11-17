@@ -277,6 +277,11 @@ bool BRepMesh_Triangulator::triangulate(NCollection_List<Poly_Triangle>& thePoly
     thePolyTriangles.Clear();
     throw;
   }
+  catch (std::bad_alloc const&)
+  {
+    thePolyTriangles.Clear();
+    throw Standard_OutOfMemory("BRepMesh_Triangulator::triangulate: std::bad_alloc");
+  }
   catch (Standard_Failure const& aFailure)
   {
     TCollection_AsciiString aStr(

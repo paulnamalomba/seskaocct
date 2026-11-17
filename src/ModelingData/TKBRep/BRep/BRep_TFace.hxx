@@ -23,6 +23,8 @@
 #include <TopLoc_Location.hxx>
 #include <Standard_Real.hxx>
 #include <TopoDS_TFace.hxx>
+
+#include <utility>
 class Geom_Surface;
 class TopoDS_TShape;
 
@@ -123,6 +125,17 @@ public:
   Standard_EXPORT void Triangulations(
     const NCollection_List<occ::handle<Poly_Triangulation>>& theTriangulations,
     const occ::handle<Poly_Triangulation>&                   theActiveTriangulation);
+
+  //! Exchanges the list of triangulations and the active triangulation of this face with the
+  //! given ones. Nothing is allocated and nothing is checked: the caller keeps the list, the
+  //! active triangulation and the Poly_MeshPurpose_Active flags consistent.
+  //! Intended for restoring a state saved earlier, including in an out-of-memory condition.
+  void ExchangeTriangulations(NCollection_List<occ::handle<Poly_Triangulation>>& theTriangulations,
+                              occ::handle<Poly_Triangulation>& theActiveTriangulation) noexcept
+  {
+    myTriangulations.Exchange(theTriangulations);
+    std::swap(myActiveTriangulation, theActiveTriangulation);
+  }
 
   //! Returns number of available face triangulations.
   int NbTriangulations() const { return myTriangulations.Length(); }

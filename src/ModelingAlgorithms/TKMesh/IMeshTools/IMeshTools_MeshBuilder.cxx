@@ -49,6 +49,7 @@ void IMeshTools_MeshBuilder::Perform(const Message_ProgressRange& theRange)
 
   //! Cleans temporary context data on every exit path, including an exception such as
   //! Standard_OutOfMemory passed on to the caller.
+  //! IMeshTools_Context::Clean() must not throw.
   class ContextCleaner
   {
   public:

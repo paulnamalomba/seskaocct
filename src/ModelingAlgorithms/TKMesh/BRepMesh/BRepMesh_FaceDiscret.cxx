@@ -217,6 +217,11 @@ void BRepMesh_FaceDiscret::process(const int                    theFaceIndex,
     aDFace->SetStatus(IMeshData_Failure);
     throw;
   }
+  catch (std::bad_alloc const&)
+  {
+    aDFace->SetStatus(IMeshData_Failure);
+    throw Standard_OutOfMemory("BRepMesh_FaceDiscret: std::bad_alloc");
+  }
   catch (Standard_Failure const& theException)
   {
     aDFace->SetStatus(IMeshData_Failure);

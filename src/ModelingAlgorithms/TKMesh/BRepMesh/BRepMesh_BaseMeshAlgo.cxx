@@ -25,6 +25,8 @@
 #include <Standard_NullObject.hxx>
 #include <Standard_OutOfMemory.hxx>
 
+#include <new>
+
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_BaseMeshAlgo, IMeshTools_MeshAlgo)
 
 //=================================================================================================
@@ -94,6 +96,11 @@ void BRepMesh_BaseMeshAlgo::Perform(const IMeshData::IFaceHandle& theDFace,
   {
     theDFace->SetStatus(IMeshData_Failure);
     throw;
+  }
+  catch (std::bad_alloc const&)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
+    throw Standard_OutOfMemory("BRepMesh_BaseMeshAlgo::Perform: std::bad_alloc");
   }
   catch (Standard_Failure const& theException)
   {

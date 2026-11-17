@@ -27,6 +27,8 @@
 #include <TopExp.hxx>
 #include <TopoDS_Vertex.hxx>
 
+#include <new>
+
 #ifdef DEBUG_HEALER
   #include <BRepBuilderAPI_MakePolygon.hxx>
   #include <BRepTools.hxx>
@@ -305,6 +307,11 @@ void BRepMesh_ModelHealer::process(const IMeshData::IFaceHandle& theDFace) const
   {
     theDFace->SetStatus(IMeshData_Failure);
     throw;
+  }
+  catch (std::bad_alloc const&)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
+    throw Standard_OutOfMemory("BRepMesh_ModelHealer: std::bad_alloc");
   }
   catch (Standard_Failure const& theException)
   {

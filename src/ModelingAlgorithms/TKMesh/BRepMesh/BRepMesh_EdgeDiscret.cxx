@@ -27,6 +27,8 @@
 #include <OSD_Parallel.hxx>
 #include <Standard_OutOfMemory.hxx>
 
+#include <new>
+
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_EdgeDiscret, IMeshTools_ModelAlgo)
 
 //=================================================================================================
@@ -192,6 +194,11 @@ void BRepMesh_EdgeDiscret::process(const int theEdgeIndex) const
   {
     aDEdge->SetStatus(IMeshData_Failure);
     throw;
+  }
+  catch (std::bad_alloc const&)
+  {
+    aDEdge->SetStatus(IMeshData_Failure);
+    throw Standard_OutOfMemory("BRepMesh_EdgeDiscret: std::bad_alloc");
   }
   catch (Standard_Failure const& theException)
   {
