@@ -15,10 +15,15 @@
 #include <NCollection_Array2.hxx>
 #include <OSD_Parallel.hxx>
 #include <OSD_ThreadPool.hxx>
+#include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
+#include <Standard_ProgramError.hxx>
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cmath>
+#include <new>
 #include <random>
 
 namespace
@@ -269,4 +274,122 @@ TEST(OSD_ParallelTest, OCC29935_MatrixMultiplyParallelMatchesSequential)
       }
     }
   }
+}
+
+namespace
+{
+
+//! Functor raising the given kind of exception for the chosen items.
+class ThrowingFunctor
+{
+public:
+  enum Kind
+  {
+    Kind_OutOfMemory,
+    Kind_BadAlloc,
+    Kind_Failure
+  };
+
+  //! theFailingIndex < 0 makes every item fail, so that several threads fail.
+  ThrowingFunctor(const Kind theKind, const int theFailingIndex)
+      : myKind(theKind),
+        myFailingIndex(theFailingIndex)
+  {
+  }
+
+  void operator()(int theIndex) const
+  {
+    if (myFailingIndex >= 0 && theIndex != myFailingIndex)
+    {
+      return;
+    }
+    switch (myKind)
+    {
+      case Kind_OutOfMemory:
+        throw Standard_OutOfMemory("injected out of memory");
+      case Kind_BadAlloc:
+        throw std::bad_alloc();
+      case Kind_Failure:
+        throw Standard_Failure("injected failure");
+    }
+  }
+
+private:
+  Kind myKind;
+  int  myFailingIndex;
+};
+
+const int THE_THROWING_ITEMS_NB = 4096;
+
+} // namespace
+
+// An out-of-memory condition raised in a parallel loop keeps its type, whichever
+// thread of the pool raised it and however many threads failed.
+TEST(OSD_ParallelTest, OutOfMemoryInParallelLoopKeepsItsType)
+{
+  for (const int aFailingIndex : {0, THE_THROWING_ITEMS_NB - 1, -1})
+  {
+    const ThrowingFunctor aFunctor(ThrowingFunctor::Kind_OutOfMemory, aFailingIndex);
+    try
+    {
+      OSD_Parallel::For(0, THE_THROWING_ITEMS_NB, aFunctor, false);
+      ADD_FAILURE() << "No exception, failing index " << aFailingIndex;
+    }
+    catch (Standard_OutOfMemory const& theException)
+    {
+      EXPECT_STREQ("injected out of memory", theException.what());
+    }
+    catch (Standard_Failure const& theException)
+    {
+      ADD_FAILURE() << "Failing index " << aFailingIndex << ": " << theException.ExceptionType()
+                    << ": " << theException.what();
+    }
+  }
+}
+
+TEST(OSD_ParallelTest, BadAllocInParallelLoopBecomesOutOfMemory)
+{
+  for (const int aFailingIndex : {0, THE_THROWING_ITEMS_NB - 1, -1})
+  {
+    const ThrowingFunctor aFunctor(ThrowingFunctor::Kind_BadAlloc, aFailingIndex);
+    EXPECT_THROW(OSD_Parallel::For(0, THE_THROWING_ITEMS_NB, aFunctor, false),
+                 Standard_OutOfMemory)
+      << "Failing index " << aFailingIndex;
+  }
+}
+
+// Regression guard: any other failure is still reported as Standard_ProgramError.
+TEST(OSD_ParallelTest, FailureInParallelLoopIsProgramError)
+{
+  for (const int aFailingIndex : {0, -1})
+  {
+    const ThrowingFunctor aFunctor(ThrowingFunctor::Kind_Failure, aFailingIndex);
+    try
+    {
+      OSD_Parallel::For(0, THE_THROWING_ITEMS_NB, aFunctor, false);
+      ADD_FAILURE() << "No exception, failing index " << aFailingIndex;
+    }
+    catch (Standard_OutOfMemory const&)
+    {
+      ADD_FAILURE() << "Standard_OutOfMemory, failing index " << aFailingIndex;
+    }
+    catch (Standard_ProgramError const&)
+    {
+    }
+  }
+}
+
+// The pool is usable after a failed loop and does not report the old failure again.
+TEST(OSD_ParallelTest, ParallelLoopAfterOutOfMemorySucceeds)
+{
+  const ThrowingFunctor aFailing(ThrowingFunctor::Kind_OutOfMemory, -1);
+  EXPECT_THROW(OSD_Parallel::For(0, THE_THROWING_ITEMS_NB, aFailing, false), Standard_OutOfMemory);
+
+  std::atomic<int> aCounter{0};
+  EXPECT_NO_THROW(OSD_Parallel::For(
+    0,
+    THE_THROWING_ITEMS_NB,
+    [&aCounter](int) { ++aCounter; },
+    false));
+  EXPECT_EQ(THE_THROWING_ITEMS_NB, aCounter.load());
 }

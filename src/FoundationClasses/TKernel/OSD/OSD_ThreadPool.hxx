@@ -53,6 +53,7 @@
 //! - OSD_ThreadPool::Launcher locks thread one-by-one from thread pool in a thread-safe way.
 //! - Each working thread catches exceptions occurred during job execution, and Launcher will
 //!   throw Standard_Failure in a caller thread on completed execution.
+//!   Standard_OutOfMemory and std::bad_alloc are thrown as Standard_OutOfMemory.
 class OSD_ThreadPool : public Standard_Transient
 {
   DEFINE_STANDARD_RTTIEXT(OSD_ThreadPool, Standard_Transient)
@@ -125,7 +126,8 @@ protected:
           myUsageCounter(0),
           myIsStarted(false),
           myToCatchFpe(false),
-          myIsSelfThread(theIsSelfThread)
+          myIsSelfThread(theIsSelfThread),
+          myIsOutOfMemory(false)
     {
     }
 
@@ -155,7 +157,8 @@ protected:
           myUsageCounter(0),
           myIsStarted(false),
           myToCatchFpe(false),
-          myIsSelfThread(false)
+          myIsSelfThread(false),
+          myIsOutOfMemory(false)
     {
       Assign(theCopy);
     }
@@ -196,6 +199,7 @@ protected:
     bool                                 myIsStarted;
     bool                                 myToCatchFpe;
     bool                                 myIsSelfThread;
+    bool                                 myIsOutOfMemory; //!< the job ran out of memory
   };
 
 public:
@@ -339,7 +343,9 @@ protected:
   void release();
 
   //! Perform the job and catch exceptions.
+  //! theIsOutOfMemory is set when the job raised Standard_OutOfMemory or std::bad_alloc.
   static void performJob(std::optional<Standard_ProgramError>& theFailure,
+                         bool&                                 theIsOutOfMemory,
                          OSD_ThreadPool::JobInterface*         theJob,
                          int                                   theThreadIndex);
 
