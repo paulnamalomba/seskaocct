@@ -51,6 +51,7 @@ This repository is the user's public, independently maintained copy [paulnamalom
 | Return null for null STEP vectors and directions | `TKDESTEP/StepToGeom/StepToGeom.cxx` | SESKAFEA X3 P1 (inline-vector `0xC0000005`) |
 | Widen the STEP and IGES real write buffers | `StepData_StepWriter.cxx`, `IGESData_IGESWriter.cxx` | SESKAFEA X3 P2 (`0xC0000409` on 17-digit reals) |
 | Bound Interface_FloatWriter formatting | `TKXSBase/Interface/Interface_FloatWriter.cxx` | SESKAFEA X3 P3 (truncated zero suppression, format overflow) |
+| Pass Standard_OutOfMemory out of BRepMesh and flag face meshing failures | `TKMesh/BRepMesh/*` (7 files), `TKMesh/IMeshTools/IMeshTools_Model{Algo,Builder}.hxx`, GTest `BRepMesh_FailurePropagation_Test.cxx` | Issue #5; SESKAFEA C1.0d `fixture.mesh-sequence`; GTest 5 fail unpatched, 32/32 pass patched |
 
 ## Shared instruction entry points
 
