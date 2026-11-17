@@ -46,7 +46,8 @@ $script:Product = 'OCCT native fork'
 $script:VersionFile = 'OCCT_INTERNAL_VERSION'
 $script:ExpectedRepository = 'github.com/paulnamalomba/seskaocct'
 $script:BuildTagPrefix = 'native/v'
-$script:VersionPattern = '^(0|[1-9]\d*)\.([0-9])\.([0-9])\.([0-9])$'
+# Major and minor hold one digit; the build field runs 0-99 without zero padding.
+$script:VersionPattern = '\A(0|[1-9][0-9]*)\.([0-9])\.([0-9])\.(0|[1-9][0-9]?)\z'
 $script:MultiDigitFirstField = $true
 $script:RecordKind = 'fork'
 $script:AllowFamilyRelease = $false
@@ -73,6 +74,12 @@ function Get-GitText {
 function Test-VersionText {
     param([string]$Text)
     return ($Text -cmatch $script:VersionPattern)
+}
+
+# True when the note text records exactly this version: 0.1.2.1 is not found inside 0.1.2.10 or 10.1.2.1.
+function Test-NoteRecordsVersion {
+    param([string]$NoteText, [string]$Text)
+    return ($NoteText -cmatch ('(?<![0-9.])' + [regex]::Escape($Text) + '(?![0-9])'))
 }
 
 function Get-FamilyOf {
@@ -178,7 +185,7 @@ function Test-BuildEvidence {
     $note = Get-FamilyNotePath -Family $family -Commits $Commits
     if (-not $note) {
         $problems.Add("Missing family note .commits/$family.md")
-    } elseif ((Get-Content -LiteralPath $note -Raw) -notmatch [regex]::Escape($Text)) {
+    } elseif (-not (Test-NoteRecordsVersion (Get-Content -LiteralPath $note -Raw) $Text)) {
         $problems.Add("Family note $(Split-Path $note -Leaf) does not record $Text")
     }
     $recordPath = Join-Path $Commits "builds/$Text.json"
@@ -317,7 +324,7 @@ function Invoke-FamilyRelease {
     if (-not $notes) { $notes = Get-FamilyNotePath -Family $family }
     if (-not $notes -or -not (Test-Path -LiteralPath $notes)) { throw 'Notes file not found' }
     $notes = (Resolve-Path -LiteralPath $notes).Path
-    if ((Get-Content -LiteralPath $notes -Raw) -notmatch [regex]::Escape($script:AcceptedVersion)) {
+    if (-not (Test-NoteRecordsVersion (Get-Content -LiteralPath $notes -Raw) $script:AcceptedVersion)) {
         throw "Notes file does not mention $script:AcceptedVersion"
     }
     foreach ($asset in $Assets) {
@@ -348,12 +355,24 @@ function Invoke-SelfCheck {
     }
 
     # Version pattern
-    foreach ($text in @('0.1.2.1', '0.0.0.0', '9.9.9.9')) { & $add "version accepts $text" (Test-VersionText $text) }
-    foreach ($text in @('0.1.2.10', '0.10.2.1', '0.1.2', '0.1.2.1x', ' 0.1.2.1', '0.1.2.-1', '', '0.1.2.1.1')) {
+    foreach ($text in @('0.1.2.1', '0.0.0.0', '9.9.9.9', '8.0.1.9', '8.0.1.10', '8.0.1.99')) { & $add "version accepts $text" (Test-VersionText $text) }
+    foreach ($text in @('8.0.1.100', '8.0.1.010', '8.0.1.00', '8.0.1.01', '0.10.2.1', '0.1.10.1', '0.1.2', '0.1.2.1x', ' 0.1.2.1', '0.1.2.-1', '', '0.1.2.1.1')) {
         & $add "version rejects '$text'" (-not (Test-VersionText $text))
     }
+    # ASCII digits only, and no trailing newline (\z, not $). The characters are built here so this file stays ASCII.
+    foreach ($text in @("8.0.1.$([char]0x0660)", "8.0.1.$([char]0x0662)", "8.0.1.1$([char]0x0662)", "8.0.1.$([char]0xFF12)", "$([char]0x0660).1.2.1", "0.$([char]0x0661).2.1", "0.1.$([char]0x0662).1", "8.0.1.1`n", "8.0.1.1`r`n")) {
+        $shown = -join ($text.ToCharArray() | ForEach-Object { if ([int]$_ -lt 32 -or [int]$_ -gt 126) { 'U+{0:X4}' -f [int]$_ } else { [string]$_ } })
+        & $add "version rejects '$shown'" (-not (Test-VersionText $text))
+    }
+    # Family-note lookup is bounded: a version is not found inside a longer one.
+    & $add "note records 8.0.1.1" (Test-NoteRecordsVersion "## 8.0.1.1`nbuilt" '8.0.1.1')
+    & $add "note records v8.0.1.1." (Test-NoteRecordsVersion "tag v8.0.1.1." '8.0.1.1')
+    & $add "note with only 8.0.1.10 does not record 8.0.1.1" (-not (Test-NoteRecordsVersion "## 8.0.1.10" '8.0.1.1'))
+    & $add "note with only 18.0.1.1 does not record 8.0.1.1" (-not (Test-NoteRecordsVersion "## 18.0.1.1" '8.0.1.1'))
+    & $add "note with only 8.0.1.x does not record 8.0.1.1" (-not (Test-NoteRecordsVersion "## 8.0.1.x" '8.0.1.1'))
     & $add 'first field width matches configuration' ((Test-VersionText '10.1.2.3') -eq $script:MultiDigitFirstField)
     & $add 'family of 0.1.2.1 is 0.1.2' ((Get-FamilyOf '0.1.2.1') -eq '0.1.2')
+    & $add 'family of 8.0.1.10 is 8.0.1' ((Get-FamilyOf '8.0.1.10') -eq '8.0.1')
 
     # Remote normalisation and ownership
     $own = $script:ExpectedRepository
