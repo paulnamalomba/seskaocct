@@ -23,6 +23,8 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstring>
+#include <iostream>
 #include <new>
 #include <random>
 
@@ -392,4 +394,82 @@ TEST(OSD_ParallelTest, ParallelLoopAfterOutOfMemorySucceeds)
     [&aCounter](int) { ++aCounter; },
     false));
   EXPECT_EQ(THE_THROWING_ITEMS_NB, aCounter.load());
+}
+
+// Idle threads of the pool do not report the old failure either: the next loop
+// has fewer items than the pool has threads.
+TEST(OSD_ParallelTest, ShortParallelLoopAfterOutOfMemorySucceeds)
+{
+  const ThrowingFunctor aFailing(ThrowingFunctor::Kind_OutOfMemory, -1);
+  EXPECT_THROW(OSD_Parallel::For(0, THE_THROWING_ITEMS_NB, aFailing, false), Standard_OutOfMemory);
+
+  std::atomic<int> aCounter{0};
+  EXPECT_NO_THROW(OSD_Parallel::For(
+    0,
+    2,
+    [&aCounter](int) { ++aCounter; },
+    false));
+  EXPECT_EQ(2, aCounter.load());
+}
+
+// Out of memory wins over the other failures of the same loop: the first item runs out
+// of memory and every other item raises a plain failure.
+TEST(OSD_ParallelTest, OutOfMemoryWinsOverOtherFailuresInParallelLoop)
+{
+  const auto aFunctor = [](int theIndex) {
+    if (theIndex == 0)
+    {
+      throw Standard_OutOfMemory("injected out of memory");
+    }
+    throw Standard_Failure("injected failure");
+  };
+
+  // Each thread stops at its first item, so repeat to let the pool threads take part.
+  for (int aRun = 0; aRun < 64; ++aRun)
+  {
+    try
+    {
+      OSD_Parallel::For(0, THE_THROWING_ITEMS_NB, aFunctor, false);
+      ADD_FAILURE() << "No exception, run " << aRun;
+    }
+    catch (Standard_OutOfMemory const& theException)
+    {
+      // The text of the out-of-memory condition comes first; other failures are only counted.
+      EXPECT_EQ(theException.what(), strstr(theException.what(), "injected out of memory"))
+        << theException.what();
+      EXPECT_EQ(nullptr, strstr(theException.what(), "injected failure")) << theException.what();
+    }
+    catch (Standard_Failure const& theException)
+    {
+      ADD_FAILURE() << "Run " << aRun << ": " << theException.ExceptionType() << ": "
+                    << theException.what();
+    }
+  }
+}
+
+namespace
+{
+
+//! Gives access to the protected nested types of OSD_ThreadPool.
+class ThreadPoolLayout : public OSD_ThreadPool
+{
+public:
+  static constexpr size_t THE_THREAD_SIZE = sizeof(OSD_ThreadPool::EnumeratedThread);
+};
+
+} // namespace
+
+// Binary compatibility guard for the out-of-memory flag of OSD_ThreadPool::EnumeratedThread.
+// The flag is a bool placed after three other bool fields, in the tail padding of the class,
+// so the size of EnumeratedThread, and of Launcher that holds one by value, did not change.
+// The sizes are those of the MSVC x64 release build of upstream V8_0_1.
+TEST(OSD_ParallelTest, ThreadPoolLayoutIsUnchanged)
+{
+  std::cout << "sizeof(OSD_ThreadPool::EnumeratedThread) = " << ThreadPoolLayout::THE_THREAD_SIZE
+            << ", sizeof(OSD_ThreadPool::Launcher) = " << sizeof(OSD_ThreadPool::Launcher)
+            << std::endl;
+#if defined(_MSC_VER) && defined(_WIN64) && !defined(_DEBUG)
+  static_assert(ThreadPoolLayout::THE_THREAD_SIZE == 432, "EnumeratedThread size changed");
+  static_assert(sizeof(OSD_ThreadPool::Launcher) == 480, "Launcher size changed");
+#endif
 }
