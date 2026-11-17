@@ -46,7 +46,8 @@ $script:Product = 'OCCT native fork'
 $script:VersionFile = 'OCCT_INTERNAL_VERSION'
 $script:ExpectedRepository = 'github.com/paulnamalomba/seskaocct'
 $script:BuildTagPrefix = 'native/v'
-$script:VersionPattern = '^(0|[1-9]\d*)\.([0-9])\.([0-9])\.([0-9])$'
+# Major and minor hold one digit; the build field runs 0-99 without zero padding.
+$script:VersionPattern = '^(0|[1-9][0-9]*)\.([0-9])\.([0-9])\.(0|[1-9][0-9]?)$'
 $script:MultiDigitFirstField = $true
 $script:RecordKind = 'fork'
 $script:AllowFamilyRelease = $false
@@ -348,12 +349,13 @@ function Invoke-SelfCheck {
     }
 
     # Version pattern
-    foreach ($text in @('0.1.2.1', '0.0.0.0', '9.9.9.9')) { & $add "version accepts $text" (Test-VersionText $text) }
-    foreach ($text in @('0.1.2.10', '0.10.2.1', '0.1.2', '0.1.2.1x', ' 0.1.2.1', '0.1.2.-1', '', '0.1.2.1.1')) {
+    foreach ($text in @('0.1.2.1', '0.0.0.0', '9.9.9.9', '8.0.1.9', '8.0.1.10', '8.0.1.99')) { & $add "version accepts $text" (Test-VersionText $text) }
+    foreach ($text in @('8.0.1.100', '8.0.1.010', '8.0.1.00', '8.0.1.01', '0.10.2.1', '0.1.10.1', '0.1.2', '0.1.2.1x', ' 0.1.2.1', '0.1.2.-1', '', '0.1.2.1.1')) {
         & $add "version rejects '$text'" (-not (Test-VersionText $text))
     }
     & $add 'first field width matches configuration' ((Test-VersionText '10.1.2.3') -eq $script:MultiDigitFirstField)
     & $add 'family of 0.1.2.1 is 0.1.2' ((Get-FamilyOf '0.1.2.1') -eq '0.1.2')
+    & $add 'family of 8.0.1.10 is 8.0.1' ((Get-FamilyOf '8.0.1.10') -eq '8.0.1')
 
     # Remote normalisation and ownership
     $own = $script:ExpectedRepository
