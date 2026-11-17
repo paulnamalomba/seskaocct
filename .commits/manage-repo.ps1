@@ -47,7 +47,7 @@ $script:VersionFile = 'OCCT_INTERNAL_VERSION'
 $script:ExpectedRepository = 'github.com/paulnamalomba/seskaocct'
 $script:BuildTagPrefix = 'native/v'
 # Major and minor hold one digit; the build field runs 0-99 without zero padding.
-$script:VersionPattern = '^(0|[1-9][0-9]*)\.([0-9])\.([0-9])\.(0|[1-9][0-9]?)$'
+$script:VersionPattern = '\A(0|[1-9][0-9]*)\.([0-9])\.([0-9])\.(0|[1-9][0-9]?)\z'
 $script:MultiDigitFirstField = $true
 $script:RecordKind = 'fork'
 $script:AllowFamilyRelease = $false
@@ -352,6 +352,11 @@ function Invoke-SelfCheck {
     foreach ($text in @('0.1.2.1', '0.0.0.0', '9.9.9.9', '8.0.1.9', '8.0.1.10', '8.0.1.99')) { & $add "version accepts $text" (Test-VersionText $text) }
     foreach ($text in @('8.0.1.100', '8.0.1.010', '8.0.1.00', '8.0.1.01', '0.10.2.1', '0.1.10.1', '0.1.2', '0.1.2.1x', ' 0.1.2.1', '0.1.2.-1', '', '0.1.2.1.1')) {
         & $add "version rejects '$text'" (-not (Test-VersionText $text))
+    }
+    # ASCII digits only, and no trailing newline (\z, not $). The characters are built here so this file stays ASCII.
+    foreach ($text in @("8.0.1.$([char]0x0660)", "8.0.1.$([char]0x0662)", "8.0.1.1$([char]0x0662)", "8.0.1.$([char]0xFF12)", "$([char]0x0660).1.2.1", "0.$([char]0x0661).2.1", "0.1.$([char]0x0662).1", "8.0.1.1`n", "8.0.1.1`r`n")) {
+        $shown = -join ($text.ToCharArray() | ForEach-Object { if ([int]$_ -lt 32 -or [int]$_ -gt 126) { 'U+{0:X4}' -f [int]$_ } else { [string]$_ } })
+        & $add "version rejects '$shown'" (-not (Test-VersionText $text))
     }
     & $add 'first field width matches configuration' ((Test-VersionText '10.1.2.3') -eq $script:MultiDigitFirstField)
     & $add 'family of 0.1.2.1 is 0.1.2' ((Get-FamilyOf '0.1.2.1') -eq '0.1.2')
