@@ -19,6 +19,7 @@
 #include <Message_Algorithm.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <Standard_Type.hxx>
 #include <IMeshData_Model.hxx>
 
@@ -38,6 +39,7 @@ public:
 
   //! Exceptions protected method to create discrete model for the given shape.
   //! Returns nullptr in case of failure.
+  //! Standard_OutOfMemory is passed on to the caller.
   occ::handle<IMeshData_Model> Perform(const TopoDS_Shape&          theShape,
                                        const IMeshTools_Parameters& theParameters)
   {
@@ -48,6 +50,11 @@ public:
       OCC_CATCH_SIGNALS
 
       return performInternal(theShape, theParameters);
+    }
+    catch (Standard_OutOfMemory const&)
+    {
+      SetStatus(Message_Fail2);
+      throw;
     }
     catch (Standard_Failure const&)
     {

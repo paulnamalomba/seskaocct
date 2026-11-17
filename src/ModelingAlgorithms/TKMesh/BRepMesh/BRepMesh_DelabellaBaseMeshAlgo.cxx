@@ -164,7 +164,7 @@ void BRepMesh_DelabellaBaseMeshAlgo::buildBaseTriangulation()
     aTriangulator->Destroy();
     aTriangulator = nullptr;
   }
-  catch (Standard_Failure const& theException)
+  catch (Standard_Failure const&)
   {
     if (aTriangulator != nullptr)
     {
@@ -172,7 +172,8 @@ void BRepMesh_DelabellaBaseMeshAlgo::buildBaseTriangulation()
       aTriangulator = nullptr;
     }
 
-    throw Standard_Failure(theException);
+    // Rethrow the original exception to keep its type, e.g. Standard_OutOfMemory.
+    throw;
   }
   catch (...)
   {

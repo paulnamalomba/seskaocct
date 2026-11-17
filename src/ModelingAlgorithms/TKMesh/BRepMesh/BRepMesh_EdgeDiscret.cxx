@@ -24,6 +24,7 @@
 #include <IMeshData_ParametersListArrayAdaptor.hxx>
 #include <BRepMesh_CurveTessellator.hxx>
 #include <OSD_Parallel.hxx>
+#include <Standard_OutOfMemory.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_EdgeDiscret, IMeshTools_ModelAlgo)
 
@@ -170,6 +171,11 @@ void BRepMesh_EdgeDiscret::process(const int theEdgeIndex) const
     {
       Tessellate2d(aDEdge, true);
     }
+  }
+  catch (Standard_OutOfMemory const&)
+  {
+    aDEdge->SetStatus(IMeshData_Failure);
+    throw;
   }
   catch (Standard_Failure const&)
   {

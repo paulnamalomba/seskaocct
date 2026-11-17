@@ -18,6 +18,7 @@
 
 #include <Standard_Transient.hxx>
 #include <Standard_ErrorHandler.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <Message_ProgressRange.hxx>
 
 class IMeshData_Model;
@@ -31,6 +32,7 @@ public:
   ~IMeshTools_ModelAlgo() override = default;
 
   //! Exceptions protected processing of the given model.
+  //! Standard_OutOfMemory is passed on to the caller.
   bool Perform(const occ::handle<IMeshData_Model>& theModel,
                const IMeshTools_Parameters&        theParameters,
                const Message_ProgressRange&        theRange)
@@ -40,6 +42,10 @@ public:
       OCC_CATCH_SIGNALS
 
       return performInternal(theModel, theParameters, theRange);
+    }
+    catch (Standard_OutOfMemory const&)
+    {
+      throw;
     }
     catch (Standard_Failure const&)
     {

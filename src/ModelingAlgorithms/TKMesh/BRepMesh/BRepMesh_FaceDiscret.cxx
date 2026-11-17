@@ -20,6 +20,7 @@
 #include <IMeshData_Edge.hxx>
 #include <IMeshTools_MeshAlgo.hxx>
 #include <OSD_Parallel.hxx>
+#include <Standard_OutOfMemory.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_FaceDiscret, IMeshTools_ModelAlgo)
 
@@ -123,6 +124,11 @@ void BRepMesh_FaceDiscret::process(const int                    theFaceIndex,
       return;
     }
     aMeshingAlgo->Perform(aDFace, myParameters, theRange);
+  }
+  catch (Standard_OutOfMemory const&)
+  {
+    aDFace->SetStatus(IMeshData_Failure);
+    throw;
   }
   catch (Standard_Failure const&)
   {

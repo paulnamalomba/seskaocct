@@ -22,6 +22,7 @@
 #include <IMeshData_Edge.hxx>
 #include <IMeshData_PCurve.hxx>
 #include <OSD_Parallel.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopExp.hxx>
 #include <TopoDS_Vertex.hxx>
 
@@ -280,6 +281,11 @@ void BRepMesh_ModelHealer::process(const IMeshData::IFaceHandle& theDFace) const
         }
       }
     }
+  }
+  catch (Standard_OutOfMemory const&)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
+    throw;
   }
   catch (Standard_Failure const&)
   {

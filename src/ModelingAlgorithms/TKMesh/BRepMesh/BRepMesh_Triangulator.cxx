@@ -19,6 +19,7 @@
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <BRepMesh_Delaun.hxx>
+#include <Standard_OutOfMemory.hxx>
 
 #ifdef CHECK_PERF
   #include <MoniTool_Timer.hxx>
@@ -217,6 +218,10 @@ bool BRepMesh_Triangulator::prepareMeshStructure()
       }
     }
   }
+  catch (Standard_OutOfMemory const&)
+  {
+    throw;
+  }
   catch (...)
   {
     myMess->Send("makeTrianglesUsingBRepMesh: Exception raised during filling of "
@@ -259,6 +264,10 @@ bool BRepMesh_Triangulator::triangulate(NCollection_List<Poly_Triangle>& thePoly
                              myTmpMap.Find(aTri2d[2]));
       thePolyTriangles.Append(aT);
     }
+  }
+  catch (Standard_OutOfMemory const&)
+  {
+    throw;
   }
   catch (Standard_Failure const& aFailure)
   {

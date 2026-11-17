@@ -21,6 +21,7 @@
 #include <BRepMesh_Delaun.hxx>
 #include <BRepMesh_ShapeTool.hxx>
 #include <Standard_ErrorHandler.hxx>
+#include <Standard_OutOfMemory.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_BaseMeshAlgo, IMeshTools_MeshAlgo)
 
@@ -38,6 +39,15 @@ void BRepMesh_BaseMeshAlgo::Perform(const IMeshData::IFaceHandle& theDFace,
                                     const IMeshTools_Parameters&  theParameters,
                                     const Message_ProgressRange&  theRange)
 {
+  // Do not hold links to the face and to the data structures.
+  const auto aReleaseData = [this]() {
+    myDFace.Nullify();
+    myStructure.Nullify();
+    myNodesMap.Nullify();
+    myUsedNodes.Nullify();
+    myAllocator.Nullify();
+  };
+
   try
   {
     OCC_CATCH_SIGNALS
@@ -59,15 +69,19 @@ void BRepMesh_BaseMeshAlgo::Perform(const IMeshData::IFaceHandle& theDFace,
       commitSurfaceTriangulation();
     }
   }
-  catch (Standard_Failure const& /*theException*/)
+  catch (Standard_OutOfMemory const&)
   {
+    // Release the data before passing the condition on to the caller.
+    theDFace->SetStatus(IMeshData_Failure);
+    aReleaseData();
+    throw;
+  }
+  catch (Standard_Failure const&)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
   }
 
-  myDFace.Nullify(); // Do not hold link to face.
-  myStructure.Nullify();
-  myNodesMap.Nullify();
-  myUsedNodes.Nullify();
-  myAllocator.Nullify();
+  aReleaseData();
 }
 
 //=================================================================================================
