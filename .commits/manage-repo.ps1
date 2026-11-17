@@ -76,6 +76,12 @@ function Test-VersionText {
     return ($Text -cmatch $script:VersionPattern)
 }
 
+# True when the note text records exactly this version: 0.1.2.1 is not found inside 0.1.2.10 or 10.1.2.1.
+function Test-NoteRecordsVersion {
+    param([string]$NoteText, [string]$Text)
+    return ($NoteText -cmatch ('(?<![0-9.])' + [regex]::Escape($Text) + '(?![0-9])'))
+}
+
 function Get-FamilyOf {
     param([string]$Text)
     return (($Text -split '\.')[0..2] -join '.')
@@ -179,7 +185,7 @@ function Test-BuildEvidence {
     $note = Get-FamilyNotePath -Family $family -Commits $Commits
     if (-not $note) {
         $problems.Add("Missing family note .commits/$family.md")
-    } elseif ((Get-Content -LiteralPath $note -Raw) -notmatch [regex]::Escape($Text)) {
+    } elseif (-not (Test-NoteRecordsVersion (Get-Content -LiteralPath $note -Raw) $Text)) {
         $problems.Add("Family note $(Split-Path $note -Leaf) does not record $Text")
     }
     $recordPath = Join-Path $Commits "builds/$Text.json"
@@ -318,7 +324,7 @@ function Invoke-FamilyRelease {
     if (-not $notes) { $notes = Get-FamilyNotePath -Family $family }
     if (-not $notes -or -not (Test-Path -LiteralPath $notes)) { throw 'Notes file not found' }
     $notes = (Resolve-Path -LiteralPath $notes).Path
-    if ((Get-Content -LiteralPath $notes -Raw) -notmatch [regex]::Escape($script:AcceptedVersion)) {
+    if (-not (Test-NoteRecordsVersion (Get-Content -LiteralPath $notes -Raw) $script:AcceptedVersion)) {
         throw "Notes file does not mention $script:AcceptedVersion"
     }
     foreach ($asset in $Assets) {
@@ -358,6 +364,12 @@ function Invoke-SelfCheck {
         $shown = -join ($text.ToCharArray() | ForEach-Object { if ([int]$_ -lt 32 -or [int]$_ -gt 126) { 'U+{0:X4}' -f [int]$_ } else { [string]$_ } })
         & $add "version rejects '$shown'" (-not (Test-VersionText $text))
     }
+    # Family-note lookup is bounded: a version is not found inside a longer one.
+    & $add "note records 8.0.1.1" (Test-NoteRecordsVersion "## 8.0.1.1`nbuilt" '8.0.1.1')
+    & $add "note records v8.0.1.1." (Test-NoteRecordsVersion "tag v8.0.1.1." '8.0.1.1')
+    & $add "note with only 8.0.1.10 does not record 8.0.1.1" (-not (Test-NoteRecordsVersion "## 8.0.1.10" '8.0.1.1'))
+    & $add "note with only 18.0.1.1 does not record 8.0.1.1" (-not (Test-NoteRecordsVersion "## 18.0.1.1" '8.0.1.1'))
+    & $add "note with only 8.0.1.x does not record 8.0.1.1" (-not (Test-NoteRecordsVersion "## 8.0.1.x" '8.0.1.1'))
     & $add 'first field width matches configuration' ((Test-VersionText '10.1.2.3') -eq $script:MultiDigitFirstField)
     & $add 'family of 0.1.2.1 is 0.1.2' ((Get-FamilyOf '0.1.2.1') -eq '0.1.2')
     & $add 'family of 8.0.1.10 is 8.0.1' ((Get-FamilyOf '8.0.1.10') -eq '8.0.1')
