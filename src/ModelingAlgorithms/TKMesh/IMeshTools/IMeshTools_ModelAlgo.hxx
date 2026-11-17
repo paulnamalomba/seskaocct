@@ -17,9 +17,12 @@
 #define _IMeshTools_ModelAlgo_HeaderFile
 
 #include <Standard_Transient.hxx>
+#include <Message.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_OutOfMemory.hxx>
 #include <Message_ProgressRange.hxx>
+
+#include <new>
 
 class IMeshData_Model;
 struct IMeshTools_Parameters;
@@ -32,7 +35,8 @@ public:
   ~IMeshTools_ModelAlgo() override = default;
 
   //! Exceptions protected processing of the given model.
-  //! Standard_OutOfMemory is passed on to the caller.
+  //! Standard_OutOfMemory is passed on to the caller;
+  //! std::bad_alloc is passed on as Standard_OutOfMemory.
   bool Perform(const occ::handle<IMeshData_Model>& theModel,
                const IMeshTools_Parameters&        theParameters,
                const Message_ProgressRange&        theRange)
@@ -47,8 +51,14 @@ public:
     {
       throw;
     }
-    catch (Standard_Failure const&)
+    catch (std::bad_alloc const&)
     {
+      throw Standard_OutOfMemory("IMeshTools_ModelAlgo::Perform: std::bad_alloc");
+    }
+    catch (Standard_Failure const& theException)
+    {
+      Message::SendFail() << DynamicType()->Name() << ": " << theException.ExceptionType() << ": "
+                          << theException.what();
       return false;
     }
   }

@@ -19,9 +19,11 @@
 #include <BRepMesh_MeshTool.hxx>
 #include <BRepMesh_Delaun.hxx>
 #include <Message.hxx>
+#include <Standard_OutOfMemory.hxx>
 
 #include <cstring>
 #include <cstdarg>
+#include <new>
 
 #include "delabella.pxx"
 
@@ -174,6 +176,17 @@ void BRepMesh_DelabellaBaseMeshAlgo::buildBaseTriangulation()
 
     // Rethrow the original exception to keep its type, e.g. Standard_OutOfMemory.
     throw;
+  }
+  catch (std::bad_alloc const&)
+  {
+    if (aTriangulator != nullptr)
+    {
+      aTriangulator->Destroy();
+      aTriangulator = nullptr;
+    }
+
+    throw Standard_OutOfMemory("BRepMesh_DelabellaBaseMeshAlgo::buildBaseTriangulation: "
+                               "out of memory");
   }
   catch (...)
   {

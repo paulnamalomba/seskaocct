@@ -16,9 +16,11 @@
 
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepMesh_Context.hxx>
+#include <IMeshData_Edge.hxx>
 #include <IMeshData_Face.hxx>
 #include <IMeshData_Wire.hxx>
 #include <IMeshTools_MeshBuilder.hxx>
+#include <Standard_OutOfMemory.hxx>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_IncrementalMesh, BRepMesh_DiscretRoot)
 
@@ -84,6 +86,9 @@ void BRepMesh_IncrementalMesh::Perform(const Message_ProgressRange& theRange)
 void BRepMesh_IncrementalMesh::Perform(const occ::handle<IMeshTools_Context>& theContext,
                                        const Message_ProgressRange&           theRange)
 {
+  // Do not report the result of a previous run.
+  myStatus = IMeshData_NoError;
+  setNotDone();
   initParameters();
 
   theContext->SetShape(Shape());
@@ -92,16 +97,39 @@ void BRepMesh_IncrementalMesh::Perform(const occ::handle<IMeshTools_Context>& th
 
   Message_ProgressScope  aPS(theRange, "Perform incmesh", 10);
   IMeshTools_MeshBuilder aIncMesh(theContext);
-  aIncMesh.Perform(aPS.Next(9));
+  try
+  {
+    aIncMesh.Perform(aPS.Next(9));
+  }
+  catch (Standard_OutOfMemory const&)
+  {
+    myStatus = IMeshData_Failure;
+    throw;
+  }
   if (!aPS.More())
   {
     myStatus = IMeshData_UserBreak;
     return;
   }
-  myStatus                                   = IMeshData_NoError;
+
+  // A failed stage (model building, edge discretization, healing, pre- or
+  // post-processing, face meshing) is a failure of the whole run.
+  if (aIncMesh.GetStatus().IsFail())
+  {
+    myStatus |= IMeshData_Failure;
+  }
+
   const occ::handle<IMeshData_Model>& aModel = theContext->GetModel();
   if (!aModel.IsNull())
   {
+    for (int aEdgeIt = 0; aEdgeIt < aModel->EdgesNb(); ++aEdgeIt)
+    {
+      if (aModel->GetEdge(aEdgeIt)->IsSet(IMeshData_Failure))
+      {
+        myStatus |= IMeshData_Failure;
+      }
+    }
+
     for (int aFaceIt = 0; aFaceIt < aModel->FacesNb(); ++aFaceIt)
     {
       const IMeshData::IFaceHandle& aDFace = aModel->GetFace(aFaceIt);

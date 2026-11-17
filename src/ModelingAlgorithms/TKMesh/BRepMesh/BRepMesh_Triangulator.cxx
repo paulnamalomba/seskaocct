@@ -21,6 +21,8 @@
 #include <BRepMesh_Delaun.hxx>
 #include <Standard_OutOfMemory.hxx>
 
+#include <new>
+
 #ifdef CHECK_PERF
   #include <MoniTool_Timer.hxx>
   #include <MoniTool_TimerSentry.hxx>
@@ -222,6 +224,10 @@ bool BRepMesh_Triangulator::prepareMeshStructure()
   {
     throw;
   }
+  catch (std::bad_alloc const&)
+  {
+    throw Standard_OutOfMemory("BRepMesh_Triangulator::prepareMeshStructure: out of memory");
+  }
   catch (...)
   {
     myMess->Send("makeTrianglesUsingBRepMesh: Exception raised during filling of "
@@ -267,6 +273,8 @@ bool BRepMesh_Triangulator::triangulate(NCollection_List<Poly_Triangle>& thePoly
   }
   catch (Standard_OutOfMemory const&)
   {
+    // Do not return a partial list of triangles.
+    thePolyTriangles.Clear();
     throw;
   }
   catch (Standard_Failure const& aFailure)

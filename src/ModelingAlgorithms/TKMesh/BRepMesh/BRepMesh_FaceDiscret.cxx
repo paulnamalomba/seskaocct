@@ -19,8 +19,17 @@
 #include <IMeshData_Wire.hxx>
 #include <IMeshData_Edge.hxx>
 #include <IMeshTools_MeshAlgo.hxx>
+#include <BRep_Builder.hxx>
+#include <BRep_Tool.hxx>
+#include <Message.hxx>
 #include <OSD_Parallel.hxx>
+#include <Poly_Triangulation.hxx>
 #include <Standard_OutOfMemory.hxx>
+
+#include <atomic>
+#include <exception>
+#include <new>
+#include <vector>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_FaceDiscret, IMeshTools_ModelAlgo)
 
@@ -53,18 +62,59 @@ public:
 
   void operator()(const int theFaceIndex) const
   {
-    if (!myScope.More())
+    if (!myScope.More() || myIsOutOfMemory.load())
     {
       return;
     }
     Message_ProgressScope aFaceScope(myRanges[theFaceIndex], nullptr, 1);
-    myAlgo->process(theFaceIndex, aFaceScope.Next());
+    try
+    {
+      myAlgo->process(theFaceIndex, aFaceScope.Next());
+    }
+    catch (Standard_OutOfMemory const&)
+    {
+      // Keep the first one, skip the remaining faces and let the caller
+      // rethrow it after the loop, when no thread works on the model.
+      keepOutOfMemory(std::current_exception());
+    }
+    catch (std::bad_alloc const&)
+    {
+      keepOutOfMemory(std::make_exception_ptr(
+        Standard_OutOfMemory("BRepMesh_FaceDiscret: std::bad_alloc")));
+    }
+  }
+
+  //! Rethrows Standard_OutOfMemory raised while processing a face, if any.
+  void RethrowOutOfMemory() const
+  {
+    if (myHasOutOfMemory.load())
+    {
+      std::rethrow_exception(myOutOfMemory);
+    }
+  }
+
+  //! Returns true if processing of a face ran out of memory.
+  bool IsOutOfMemory() const { return myHasOutOfMemory.load(); }
+
+private:
+  //! Keeps the first out-of-memory exception and makes the remaining faces be skipped.
+  void keepOutOfMemory(const std::exception_ptr& theException) const
+  {
+    bool isFirst = false;
+    if (myIsOutOfMemory.compare_exchange_strong(isFirst, true))
+    {
+      myOutOfMemory = theException;
+      myHasOutOfMemory.store(true);
+    }
   }
 
 private:
   mutable BRepMesh_FaceDiscret*                   myAlgo;
   Message_ProgressScope                           myScope;
   NCollection_LinearVector<Message_ProgressRange> myRanges;
+  mutable std::atomic<bool>                       myIsOutOfMemory{false};  //!< claimed by a thread
+  mutable std::atomic<bool>                       myHasOutOfMemory{false}; //!< exception is stored
+  mutable std::exception_ptr                      myOutOfMemory;
 };
 
 //=================================================================================================
@@ -73,6 +123,22 @@ bool BRepMesh_FaceDiscret::performInternal(const occ::handle<IMeshData_Model>& t
                                            const IMeshTools_Parameters&        theParameters,
                                            const Message_ProgressRange&        theRange)
 {
+  //! Releases the link to the model on every exit path.
+  class ModelReleaser
+  {
+  public:
+    ModelReleaser(occ::handle<IMeshData_Model>& theModel)
+        : myModel(theModel)
+    {
+    }
+
+    ~ModelReleaser() { myModel.Nullify(); }
+
+  private:
+    occ::handle<IMeshData_Model>& myModel;
+  };
+
+  const ModelReleaser aReleaser(myModel);
   myModel      = theModel;
   myParameters = theParameters;
   if (myModel.IsNull())
@@ -80,18 +146,39 @@ bool BRepMesh_FaceDiscret::performInternal(const occ::handle<IMeshData_Model>& t
     return false;
   }
 
-  FaceListFunctor aFunctor(this, theRange);
-  OSD_Parallel::For(0,
-                    myModel->FacesNb(),
-                    aFunctor,
-                    !myParameters.InParallel || myModel->FacesNb() <= 1);
-  if (!theRange.More())
+  // Triangulations of the faces before meshing, restored if meshing runs out of memory.
+  const int                                    aFacesNb = myModel->FacesNb();
+  std::vector<occ::handle<Poly_Triangulation>> aInitialTriangulations(aFacesNb);
+  for (int aFaceIt = 0; aFaceIt < aFacesNb; ++aFaceIt)
   {
-    return false;
+    const TopoDS_Face& aFace = myModel->GetFace(aFaceIt)->GetFace();
+    TopLoc_Location    aLoc;
+    if (!aFace.IsNull())
+    {
+      aInitialTriangulations[aFaceIt] = BRep_Tool::Triangulation(aFace, aLoc);
+    }
   }
 
-  myModel.Nullify(); // Do not hold link to model.
-  return true;
+  FaceListFunctor aFunctor(this, theRange);
+  OSD_Parallel::For(0, aFacesNb, aFunctor, !myParameters.InParallel || aFacesNb <= 1);
+  if (aFunctor.IsOutOfMemory())
+  {
+    // Do not leave the triangulations of the faces meshed before the failure on the shape.
+    BRep_Builder aBuilder;
+    for (int aFaceIt = 0; aFaceIt < aFacesNb; ++aFaceIt)
+    {
+      const TopoDS_Face& aFace = myModel->GetFace(aFaceIt)->GetFace();
+      TopLoc_Location    aLoc;
+      if (!aFace.IsNull()
+          && BRep_Tool::Triangulation(aFace, aLoc) != aInitialTriangulations[aFaceIt])
+      {
+        aBuilder.UpdateFace(aFace, aInitialTriangulations[aFaceIt]);
+      }
+    }
+    aFunctor.RethrowOutOfMemory();
+  }
+
+  return theRange.More();
 }
 
 //=================================================================================================
@@ -130,8 +217,10 @@ void BRepMesh_FaceDiscret::process(const int                    theFaceIndex,
     aDFace->SetStatus(IMeshData_Failure);
     throw;
   }
-  catch (Standard_Failure const&)
+  catch (Standard_Failure const& theException)
   {
     aDFace->SetStatus(IMeshData_Failure);
+    Message::SendFail() << "BRepMesh_FaceDiscret: " << theException.ExceptionType() << ": "
+                        << theException.what();
   }
 }
