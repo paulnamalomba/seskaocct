@@ -52,6 +52,8 @@ This repository is the user's public, independently maintained copy [paulnamalom
 | Widen the STEP and IGES real write buffers | `StepData_StepWriter.cxx`, `IGESData_IGESWriter.cxx` | SESKAFEA X3 P2 (`0xC0000409` on 17-digit reals) |
 | Bound Interface_FloatWriter formatting | `TKXSBase/Interface/Interface_FloatWriter.cxx` | SESKAFEA X3 P3 (truncated zero suppression, format overflow) |
 | Pass Standard_OutOfMemory out of BRepMesh and flag face meshing failures | `TKMesh/BRepMesh/*` (7 files), `TKMesh/IMeshTools/IMeshTools_Model{Algo,Builder}.hxx`, GTest `BRepMesh_FailurePropagation_Test.cxx` | Issue #5; SESKAFEA C1.0d `fixture.mesh-sequence`; GTest 5 fail unpatched, 32/32 pass patched |
+| Keep Standard_OutOfMemory typed across OSD_ThreadPool | `TKernel/OSD/OSD_ThreadPool.{cxx,hxx}`, GTest `OSD_Parallel_Test.cxx` | Issue #5; 4 new GTests, 4 fail with the change stashed |
+| Report BRepMesh failures in the mesher status and define the state after out of memory | `TKMesh/BRepMesh/*` (7 files), `TKMesh/IMeshTools/IMeshTools_{MeshBuilder.cxx,ModelAlgo.hxx,ModelBuilder.hxx}`, GTest `BRepMesh_FailurePropagation_Test.cxx` | Issue #5 review; 13 fail with the change stashed, 49/49 pass (`BRepMesh_*:OSD_Parallel*`) |
 
 ## Shared instruction entry points
 
