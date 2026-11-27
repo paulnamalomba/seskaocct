@@ -17,6 +17,7 @@
 
 #include <BRep_Builder.hxx>
 #include <BRep_CurveRepresentation.hxx>
+#include <BRep_Polygon3D.hxx>
 #include <BRep_TEdge.hxx>
 #include <BRep_TFace.hxx>
 #include <BRep_Tool.hxx>
@@ -46,6 +47,8 @@
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <Message_Printer.hxx>
+#include <NCollection_Array1.hxx>
+#include <Poly_Polygon3D.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Standard_Failure.hxx>
 #include <Standard_NullObject.hxx>
@@ -1122,5 +1125,61 @@ TEST(BRepMesh_FailurePropagationTest, ModelHealerReleasesModelOnOutOfMemory)
   EXPECT_THROW(meshWithContext(aMesher, aBox, aContext), Standard_OutOfMemory);
   ASSERT_FALSE(aContext->GetModel().IsNull());
   EXPECT_EQ(1, aContext->GetModel()->GetRefCount());
+  EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
+}
+
+namespace
+{
+
+//! 3D polygon representation that cannot be copied: Copy() runs out of memory.
+class UncopiablePolygon3D : public BRep_Polygon3D
+{
+public:
+  UncopiablePolygon3D(const occ::handle<Poly_Polygon3D>& thePolygon,
+                      const TopLoc_Location&             theLocation)
+      : BRep_Polygon3D(thePolygon, theLocation)
+  {
+  }
+
+  occ::handle<BRep_CurveRepresentation> Copy() const override
+  {
+    throw Standard_OutOfMemory("injected out-of-memory condition");
+  }
+};
+
+} // namespace
+
+// Saving the mesh of the shape runs out of memory before the run starts: the shape is
+// left as it is, and the incomplete saved state is not put on it.
+TEST(BRepMesh_FailurePropagationTest, OutOfMemoryWhileSavingMeshLeavesShapeUnchanged)
+{
+  const TopoDS_Shape aShape = cylindersWithFreeEdge();
+
+  BRepMesh_IncrementalMesh aMesher;
+  meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.5);
+  ASSERT_EQ(0, aMesher.GetStatusFlags());
+
+  // The last edge met gets the representation in front of its other ones, so the faces
+  // and the other edges are saved before the failure.
+  occ::handle<BRep_TEdge> aTEdge;
+  for (TopExp_Explorer anExp(aShape, TopAbs_EDGE); anExp.More(); anExp.Next())
+  {
+    aTEdge = occ::down_cast<BRep_TEdge>(anExp.Current().TShape());
+  }
+  ASSERT_FALSE(aTEdge.IsNull());
+  NCollection_Array1<gp_Pnt> aNodes(1, 2);
+  aNodes(1) = gp_Pnt(0.0, 0.0, 0.0);
+  aNodes(2) = gp_Pnt(1.0, 0.0, 0.0);
+  aTEdge->ChangeCurves().Prepend(
+    new UncopiablePolygon3D(new Poly_Polygon3D(aNodes), TopLoc_Location()));
+  const size_t    aCurvesNb = aTEdge->Curves().Size();
+  const MeshState aBefore   = meshState(aShape);
+
+  EXPECT_THROW(meshWithDeflection(aMesher, aShape, new BRepMesh_Context(), 0.01),
+               Standard_OutOfMemory);
+  EXPECT_EQ(aCurvesNb, aTEdge->Curves().Size());
+  EXPECT_EQ(6, triangulatedFacesNb(aShape));
+  EXPECT_TRUE(meshState(aShape) == aBefore);
+  EXPECT_FALSE(aMesher.IsDone());
   EXPECT_EQ(int(IMeshData_Failure), aMesher.GetStatusFlags());
 }

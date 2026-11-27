@@ -164,6 +164,9 @@ bool BRepMesh_FaceDiscret::performInternal(const occ::handle<IMeshData_Model>& t
   if (aFunctor.IsOutOfMemory())
   {
     // Do not leave the triangulations of the faces meshed before the failure on the shape.
+    // This is a best effort for direct users of BRepMesh_FaceDiscret: BRep_Builder::UpdateFace
+    // can allocate, and the polygons of the edges are not handled here. The defined state after
+    // out of memory is the one restored by BRepMesh_IncrementalMesh::Perform.
     BRep_Builder aBuilder;
     for (int aFaceIt = 0; aFaceIt < aFacesNb; ++aFaceIt)
     {

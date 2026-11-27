@@ -244,10 +244,26 @@ void BRepMesh_IncrementalMesh::Perform(const occ::handle<IMeshTools_Context>& th
 
   // A run that runs out of memory leaves the mesh that the shape had before it:
   // the stages remove outdated triangulations and polygons before the new ones are complete.
+  // Saving is apart from the run: when it runs out of memory, nothing on the shape has
+  // changed yet and the incomplete saved state must not be put back.
   MeshStateKeeper aInitialMesh;
   try
   {
     aInitialMesh.Save(Shape());
+  }
+  catch (Standard_OutOfMemory const&)
+  {
+    myStatus = IMeshData_Failure;
+    throw;
+  }
+  catch (std::bad_alloc const&)
+  {
+    myStatus = IMeshData_Failure;
+    throw Standard_OutOfMemory("BRepMesh_IncrementalMesh::Perform: std::bad_alloc");
+  }
+
+  try
+  {
     aIncMesh.Perform(aPS.Next(9));
   }
   catch (Standard_OutOfMemory const&)
