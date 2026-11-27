@@ -23,6 +23,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <new>
@@ -339,13 +340,56 @@ TEST(OSD_ParallelTest, OutOfMemoryInParallelLoopKeepsItsType)
     }
     catch (Standard_OutOfMemory const& theException)
     {
-      EXPECT_STREQ("injected out of memory", theException.what());
+      // The other threads that failed, if any, are only counted after the text.
+      const char* aText = "injected out of memory";
+      EXPECT_EQ(0, strncmp(aText, theException.what(), strlen(aText))) << theException.what();
+      if (aFailingIndex >= 0)
+      {
+        EXPECT_STREQ(aText, theException.what());
+      }
     }
     catch (Standard_Failure const& theException)
     {
       ADD_FAILURE() << "Failing index " << aFailingIndex << ": " << theException.ExceptionType()
                     << ": " << theException.what();
     }
+  }
+}
+
+// When several threads run out of memory, the first one is reported and the others are
+// counted with the threads that failed otherwise.
+TEST(OSD_ParallelTest, OutOfMemoryInSeveralThreadsCountsTheOthers)
+{
+  std::atomic<int> aNbThrows{0};
+  try
+  {
+    OSD_Parallel::For(
+      0,
+      THE_THROWING_ITEMS_NB,
+      [&aNbThrows](int) {
+        ++aNbThrows;
+        throw Standard_OutOfMemory("injected out of memory");
+      },
+      false);
+    ADD_FAILURE() << "No exception";
+  }
+  catch (Standard_OutOfMemory const& theException)
+  {
+    // Each failed thread stops at its first item, so each throw is one failed thread.
+    const int aNbOthers = aNbThrows.load() - 1;
+    char      anExpected[256];
+    if (aNbOthers == 0)
+    {
+      snprintf(anExpected, sizeof(anExpected), "injected out of memory");
+    }
+    else
+    {
+      snprintf(anExpected,
+               sizeof(anExpected),
+               "injected out of memory (and %d other failed threads)",
+               aNbOthers);
+    }
+    EXPECT_STREQ(anExpected, theException.what());
   }
 }
 
