@@ -16,11 +16,15 @@
 #ifndef _IMeshTools_ModelBuilder_HeaderFile
 #define _IMeshTools_ModelBuilder_HeaderFile
 
+#include <Message.hxx>
 #include <Message_Algorithm.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <Standard_Type.hxx>
 #include <IMeshData_Model.hxx>
+
+#include <new>
 
 struct IMeshTools_Parameters;
 
@@ -38,6 +42,8 @@ public:
 
   //! Exceptions protected method to create discrete model for the given shape.
   //! Returns nullptr in case of failure.
+  //! Standard_OutOfMemory is passed on to the caller;
+  //! std::bad_alloc is passed on as Standard_OutOfMemory.
   occ::handle<IMeshData_Model> Perform(const TopoDS_Shape&          theShape,
                                        const IMeshTools_Parameters& theParameters)
   {
@@ -49,9 +55,21 @@ public:
 
       return performInternal(theShape, theParameters);
     }
-    catch (Standard_Failure const&)
+    catch (Standard_OutOfMemory const&)
     {
       SetStatus(Message_Fail2);
+      throw;
+    }
+    catch (std::bad_alloc const&)
+    {
+      SetStatus(Message_Fail2);
+      throw Standard_OutOfMemory("IMeshTools_ModelBuilder::Perform: std::bad_alloc");
+    }
+    catch (Standard_Failure const& theException)
+    {
+      SetStatus(Message_Fail2);
+      Message::SendFail() << DynamicType()->Name() << ": " << theException.ExceptionType() << ": "
+                          << theException.what();
       return nullptr;
     }
   }

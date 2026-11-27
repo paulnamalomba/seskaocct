@@ -16,8 +16,12 @@
 
 #include <OSD.hxx>
 #include <OSD_Parallel.hxx>
+#include <Standard_CString.hxx>
 #include <Standard_ErrorHandler.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TCollection_AsciiString.hxx>
+
+#include <new>
 
 IMPLEMENT_STANDARD_RTTIEXT(OSD_ThreadPool, Standard_Transient)
 
@@ -45,7 +49,7 @@ void OSD_ThreadPool::EnumeratedThread::WakeUp(JobInterface* theJob, bool theToCa
   {
     if (theJob != nullptr)
     {
-      OSD_ThreadPool::performJob(myFailure, myJob, myThreadIndex);
+      OSD_ThreadPool::performJob(myFailure, myIsOutOfMemory, myJob, myThreadIndex);
     }
     return;
   }
@@ -211,16 +215,47 @@ void OSD_ThreadPool::Launcher::run(JobInterface& theJob)
 
 void OSD_ThreadPool::Launcher::wait()
 {
-  int aNbFailures = 0;
+  int                     aNbFailures  = 0; // failed threads other than the one reported
+  const EnumeratedThread* aOutOfMemory = nullptr;
   for (NCollection_Array1<EnumeratedThread*>::Iterator aThreadIter(myThreads);
        aThreadIter.More() && aThreadIter.Value() != nullptr;
        aThreadIter.Next())
   {
     aThreadIter.ChangeValue()->WaitIdle();
-    if (aThreadIter.Value()->myFailure)
+    // The flag is checked apart from the stored failure: a thread that ran out of memory
+    // may have been unable to store one.
+    if (aThreadIter.Value()->myIsOutOfMemory)
+    {
+      if (aOutOfMemory == nullptr)
+      {
+        aOutOfMemory = aThreadIter.Value();
+      }
+      else
+      {
+        ++aNbFailures;
+      }
+    }
+    else if (aThreadIter.Value()->myFailure)
     {
       ++aNbFailures;
     }
+  }
+
+  if (aOutOfMemory != nullptr)
+  {
+    // Keep the type of the exception, so that a caller handling Standard_OutOfMemory
+    // sees it whether the job runs in this thread or in the pool, and whatever else failed.
+    // Nothing is allocated here: Standard_OutOfMemory stores its message in a field.
+    const char* aMessage = aOutOfMemory->myFailure ? aOutOfMemory->myFailure->what()
+                                                   : "OSD_ThreadPool: out of memory in a job";
+    if (aNbFailures == 0)
+    {
+      throw Standard_OutOfMemory(aMessage);
+    }
+
+    char aBuffer[1024];
+    Sprintf(aBuffer, "%.900s (and %d other failed threads)", aMessage, aNbFailures);
+    throw Standard_OutOfMemory(aBuffer);
   }
   if (aNbFailures == 0)
   {
@@ -255,29 +290,85 @@ void OSD_ThreadPool::Launcher::wait()
 //=================================================================================================
 
 void OSD_ThreadPool::performJob(std::optional<Standard_ProgramError>& theFailure,
+                                bool&                                 theIsOutOfMemory,
                                 OSD_ThreadPool::JobInterface*         theJob,
                                 int                                   theThreadIndex)
 {
+  theFailure.reset();
+  theIsOutOfMemory = false;
   try
   {
     OCC_CATCH_SIGNALS
     theJob->Perform(theThreadIndex);
   }
+  catch (Standard_OutOfMemory const& aFailure)
+  {
+    // The message is kept without a prefix: it is passed on as Standard_OutOfMemory.
+    // Storing the message allocates memory and can fail in turn; the flag alone is enough
+    // for Launcher::wait() to report the condition, and no exception may leave this handler.
+    theIsOutOfMemory = true;
+    try
+    {
+      theFailure.emplace(aFailure.what(), nullptr);
+    }
+    catch (...)
+    {
+      theFailure.reset();
+    }
+  }
+  catch (std::bad_alloc const&)
+  {
+    theIsOutOfMemory = true;
+    try
+    {
+      theFailure.emplace("std::bad_alloc", nullptr);
+    }
+    catch (...)
+    {
+      theFailure.reset();
+    }
+  }
   catch (Standard_Failure const& aFailure)
   {
-    TCollection_AsciiString aMsg =
-      TCollection_AsciiString(aFailure.ExceptionType()) + ": " + aFailure.what();
-    theFailure.emplace(aMsg.ToCString(), aFailure.GetStackString());
+    // Building or storing the message allocates memory. When that fails, the thread is
+    // reported as out of memory: no exception may leave these handlers either.
+    try
+    {
+      TCollection_AsciiString aMsg =
+        TCollection_AsciiString(aFailure.ExceptionType()) + ": " + aFailure.what();
+      theFailure.emplace(aMsg.ToCString(), aFailure.GetStackString());
+    }
+    catch (...)
+    {
+      theFailure.reset();
+      theIsOutOfMemory = true;
+    }
   }
   catch (std::exception& anStdException)
   {
-    TCollection_AsciiString aMsg =
-      TCollection_AsciiString(typeid(anStdException).name()) + ": " + anStdException.what();
-    theFailure.emplace(aMsg.ToCString(), nullptr);
+    try
+    {
+      TCollection_AsciiString aMsg =
+        TCollection_AsciiString(typeid(anStdException).name()) + ": " + anStdException.what();
+      theFailure.emplace(aMsg.ToCString(), nullptr);
+    }
+    catch (...)
+    {
+      theFailure.reset();
+      theIsOutOfMemory = true;
+    }
   }
   catch (...)
   {
-    theFailure.emplace("Error: Unknown exception", nullptr);
+    try
+    {
+      theFailure.emplace("Error: Unknown exception", nullptr);
+    }
+    catch (...)
+    {
+      theFailure.reset();
+      theIsOutOfMemory = true;
+    }
   }
 }
 
@@ -299,7 +390,7 @@ void OSD_ThreadPool::EnumeratedThread::performThread()
     if (myJob != nullptr)
     {
       OSD::SetThreadLocalSignal(OSD::SignalMode(), myToCatchFpe);
-      OSD_ThreadPool::performJob(myFailure, myJob, myThreadIndex);
+      OSD_ThreadPool::performJob(myFailure, myIsOutOfMemory, myJob, myThreadIndex);
       myJob = nullptr;
     }
     myIdleEvent.Set();

@@ -25,6 +25,7 @@
 #include <TopoDS_Vertex.hxx>
 #include <BRep_Tool.hxx>
 #include <Standard_ErrorHandler.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <BRepMesh_Delaun.hxx>
 
 //! Extends base meshing algo in order to enable possibility
@@ -214,8 +215,13 @@ private:
 
       this->registerNode(BRep_Tool::Pnt(theVertex), aPnt2d, BRepMesh_Fixed, false);
     }
+    catch (Standard_OutOfMemory const&)
+    {
+      throw;
+    }
     catch (Standard_Failure const&)
     {
+      // The vertex cannot be inserted, e.g. it has no parameters on the face; skip it.
     }
   }
 

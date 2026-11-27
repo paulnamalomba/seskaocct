@@ -23,7 +23,11 @@
 #include <BRepMesh_EdgeTessellationExtractor.hxx>
 #include <IMeshData_ParametersListArrayAdaptor.hxx>
 #include <BRepMesh_CurveTessellator.hxx>
+#include <Message.hxx>
 #include <OSD_Parallel.hxx>
+#include <Standard_OutOfMemory.hxx>
+
+#include <new>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_EdgeDiscret, IMeshTools_ModelAlgo)
 
@@ -79,6 +83,23 @@ bool BRepMesh_EdgeDiscret::performInternal(const occ::handle<IMeshData_Model>& t
                                            const Message_ProgressRange&        theRange)
 {
   (void)theRange;
+
+  //! Releases the link to the model on every exit path.
+  class ModelReleaser
+  {
+  public:
+    ModelReleaser(occ::handle<IMeshData_Model>& theModel)
+        : myModel(theModel)
+    {
+    }
+
+    ~ModelReleaser() { myModel.Nullify(); }
+
+  private:
+    occ::handle<IMeshData_Model>& myModel;
+  };
+
+  const ModelReleaser aReleaser(myModel);
   myModel      = theModel;
   myParameters = theParameters;
 
@@ -88,8 +109,6 @@ bool BRepMesh_EdgeDiscret::performInternal(const occ::handle<IMeshData_Model>& t
   }
 
   OSD_Parallel::For(0, myModel->EdgesNb(), *this, !myParameters.InParallel);
-
-  myModel.Nullify(); // Do not hold link to model.
   return true;
 }
 
@@ -171,9 +190,21 @@ void BRepMesh_EdgeDiscret::process(const int theEdgeIndex) const
       Tessellate2d(aDEdge, true);
     }
   }
-  catch (Standard_Failure const&)
+  catch (Standard_OutOfMemory const&)
   {
     aDEdge->SetStatus(IMeshData_Failure);
+    throw;
+  }
+  catch (std::bad_alloc const&)
+  {
+    aDEdge->SetStatus(IMeshData_Failure);
+    throw Standard_OutOfMemory("BRepMesh_EdgeDiscret: std::bad_alloc");
+  }
+  catch (Standard_Failure const& theException)
+  {
+    aDEdge->SetStatus(IMeshData_Failure);
+    Message::SendFail() << "BRepMesh_EdgeDiscret: " << theException.ExceptionType() << ": "
+                        << theException.what();
   }
 }
 

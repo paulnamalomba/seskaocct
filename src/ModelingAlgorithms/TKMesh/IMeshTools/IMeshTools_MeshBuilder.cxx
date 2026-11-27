@@ -47,6 +47,24 @@ void IMeshTools_MeshBuilder::Perform(const Message_ProgressRange& theRange)
     return;
   }
 
+  //! Cleans temporary context data on every exit path, including an exception such as
+  //! Standard_OutOfMemory passed on to the caller.
+  //! IMeshTools_Context::Clean() must not throw.
+  class ContextCleaner
+  {
+  public:
+    ContextCleaner(const occ::handle<IMeshTools_Context>& theContext)
+        : myContext(theContext)
+    {
+    }
+
+    ~ContextCleaner() { myContext->Clean(); }
+
+  private:
+    const occ::handle<IMeshTools_Context>& myContext;
+  };
+
+  const ContextCleaner  aCleaner(aContext);
   Message_ProgressScope aPS(theRange, "Mesh Perform", 10);
 
   if (aContext->BuildModel())
@@ -73,7 +91,6 @@ void IMeshTools_MeshBuilder::Perform(const Message_ProgressRange& theRange)
             if (!aPS.More())
             {
               SetStatus(Message_Fail8);
-              aContext->Clean();
               return;
             }
             SetStatus(Message_Fail6);
@@ -109,5 +126,4 @@ void IMeshTools_MeshBuilder::Perform(const Message_ProgressRange& theRange)
     }
   }
   aPS.Next(1);
-  aContext->Clean();
 }

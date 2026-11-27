@@ -6,6 +6,7 @@ set(OCCT_TKMesh_GTests_FILES
   BRepMesh_CircleTool_Test.cxx
   BRepMesh_Delaun_Test.cxx
   BRepMesh_DiscretAlgoFactory_Test.cxx
+  BRepMesh_FailurePropagation_Test.cxx
   BRepMesh_GeomTool_Test.cxx
   BRepMesh_IncrementalMesh_Test.cxx
 )

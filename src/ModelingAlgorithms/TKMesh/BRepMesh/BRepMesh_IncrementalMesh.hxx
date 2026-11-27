@@ -58,6 +58,9 @@ public: //! @name mesher API
     const Message_ProgressRange& theRange = Message_ProgressRange()) override;
 
   //! Performs meshing using custom context;
+  //! If the run is out of memory (Standard_OutOfMemory or std::bad_alloc at any stage),
+  //! Standard_OutOfMemory is thrown, GetStatusFlags() is IMeshData_Failure, IsDone() is false
+  //! and the shape keeps the triangulations and polygons that it had before the call.
   Standard_EXPORT void Perform(const occ::handle<IMeshTools_Context>& theContext,
                                const Message_ProgressRange& theRange = Message_ProgressRange());
 
@@ -72,6 +75,10 @@ public: //! @name accessing to parameters.
   bool IsModified() const { return myModified; }
 
   //! Returns accumulated status flags faced during meshing.
+  //! IMeshData_Failure is set not only for a face that could not be meshed, but also when
+  //! a stage of the run failed (model building, edge discretization, healing, pre- or
+  //! post-processing, face meshing) or when the discretization of an edge failed, including
+  //! a free edge. IsDone() stays true in these cases, so check the flags as well.
   int GetStatusFlags() const { return myStatus; }
 
 private:

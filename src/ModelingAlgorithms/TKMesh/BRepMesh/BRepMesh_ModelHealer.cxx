@@ -21,9 +21,13 @@
 #include <IMeshData_Wire.hxx>
 #include <IMeshData_Edge.hxx>
 #include <IMeshData_PCurve.hxx>
+#include <Message.hxx>
 #include <OSD_Parallel.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopExp.hxx>
 #include <TopoDS_Vertex.hxx>
+
+#include <new>
 
 #ifdef DEBUG_HEALER
   #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -127,6 +131,27 @@ bool BRepMesh_ModelHealer::performInternal(const occ::handle<IMeshData_Model>& t
                                            const Message_ProgressRange&        theRange)
 {
   (void)theRange;
+
+  //! Releases the links to the model and to the intersection data on every exit path.
+  class DataReleaser
+  {
+  public:
+    DataReleaser(BRepMesh_ModelHealer& theHealer)
+        : myHealer(theHealer)
+    {
+    }
+
+    ~DataReleaser()
+    {
+      myHealer.myFaceIntersectingEdges.Nullify();
+      myHealer.myModel.Nullify();
+    }
+
+  private:
+    BRepMesh_ModelHealer& myHealer;
+  };
+
+  const DataReleaser aReleaser(*this);
   myModel      = theModel;
   myParameters = theParameters;
   if (myModel.IsNull())
@@ -162,9 +187,6 @@ bool BRepMesh_ModelHealer::performInternal(const occ::handle<IMeshData_Model>& t
       aDFace->SetStatus(IMeshData_Failure);
     }
   }
-
-  myFaceIntersectingEdges.Nullify();
-  myModel.Nullify(); // Do not hold link to model.
   return true;
 }
 
@@ -281,9 +303,21 @@ void BRepMesh_ModelHealer::process(const IMeshData::IFaceHandle& theDFace) const
       }
     }
   }
-  catch (Standard_Failure const&)
+  catch (Standard_OutOfMemory const&)
   {
     theDFace->SetStatus(IMeshData_Failure);
+    throw;
+  }
+  catch (std::bad_alloc const&)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
+    throw Standard_OutOfMemory("BRepMesh_ModelHealer: std::bad_alloc");
+  }
+  catch (Standard_Failure const& theException)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
+    Message::SendFail() << "BRepMesh_ModelHealer: " << theException.ExceptionType() << ": "
+                        << theException.what();
   }
 }
 

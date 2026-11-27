@@ -20,7 +20,12 @@
 #include <IMeshData_Curve.hxx>
 #include <BRepMesh_Delaun.hxx>
 #include <BRepMesh_ShapeTool.hxx>
+#include <Message.hxx>
 #include <Standard_ErrorHandler.hxx>
+#include <Standard_NullObject.hxx>
+#include <Standard_OutOfMemory.hxx>
+
+#include <new>
 
 IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_BaseMeshAlgo, IMeshTools_MeshAlgo)
 
@@ -38,6 +43,34 @@ void BRepMesh_BaseMeshAlgo::Perform(const IMeshData::IFaceHandle& theDFace,
                                     const IMeshTools_Parameters&  theParameters,
                                     const Message_ProgressRange&  theRange)
 {
+  if (theDFace.IsNull())
+  {
+    throw Standard_NullObject("BRepMesh_BaseMeshAlgo::Perform: null face");
+  }
+
+  //! Releases the links to the face and to the data structures on every exit path.
+  class DataReleaser
+  {
+  public:
+    DataReleaser(BRepMesh_BaseMeshAlgo& theAlgo)
+        : myAlgo(theAlgo)
+    {
+    }
+
+    ~DataReleaser()
+    {
+      myAlgo.myDFace.Nullify();
+      myAlgo.myStructure.Nullify();
+      myAlgo.myNodesMap.Nullify();
+      myAlgo.myUsedNodes.Nullify();
+      myAlgo.myAllocator.Nullify();
+    }
+
+  private:
+    BRepMesh_BaseMeshAlgo& myAlgo;
+  };
+
+  const DataReleaser aReleaser(*this);
   try
   {
     OCC_CATCH_SIGNALS
@@ -59,15 +92,22 @@ void BRepMesh_BaseMeshAlgo::Perform(const IMeshData::IFaceHandle& theDFace,
       commitSurfaceTriangulation();
     }
   }
-  catch (Standard_Failure const& /*theException*/)
+  catch (Standard_OutOfMemory const&)
   {
+    theDFace->SetStatus(IMeshData_Failure);
+    throw;
   }
-
-  myDFace.Nullify(); // Do not hold link to face.
-  myStructure.Nullify();
-  myNodesMap.Nullify();
-  myUsedNodes.Nullify();
-  myAllocator.Nullify();
+  catch (std::bad_alloc const&)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
+    throw Standard_OutOfMemory("BRepMesh_BaseMeshAlgo::Perform: std::bad_alloc");
+  }
+  catch (Standard_Failure const& theException)
+  {
+    theDFace->SetStatus(IMeshData_Failure);
+    Message::SendFail() << "BRepMesh_BaseMeshAlgo::Perform: " << theException.ExceptionType()
+                        << ": " << theException.what();
+  }
 }
 
 //=================================================================================================
