@@ -56,6 +56,8 @@ This repository is the user's public, independently maintained copy [paulnamalom
 | Report BRepMesh failures in the mesher status and define the state after out of memory | `TKMesh/BRepMesh/*` (7 files), `TKMesh/IMeshTools/IMeshTools_{MeshBuilder.cxx,ModelAlgo.hxx,ModelBuilder.hxx}`, GTest `BRepMesh_FailurePropagation_Test.cxx` | Issue #5 review; 13 fail with the change stashed, 49/49 pass (`BRepMesh_*:OSD_Parallel*`) |
 | Keep the thread pool alive when storing an out-of-memory failure fails | `TKernel/OSD/OSD_ThreadPool.cxx`, GTest `OSD_Parallel_Test.cxx` | Issue #5 review round 2; capture path argued from code, precedence mutation fails 1 test; `sizeof` of `EnumeratedThread` 432 and `Launcher` 480 unchanged |
 | Restore the previous mesh when BRepMesh_IncrementalMesh runs out of memory | `TKMesh/BRepMesh/*` (7 files), `TKMesh/IMeshTools/IMeshTools_{Context.hxx,MeshBuilder.cxx}`, `TKBRep/BRep/BRep_TFace.hxx`, GTest `BRepMesh_FailurePropagation_Test.cxx` | Issue #5 review round 2; 11 mutations each fail their test, 59/59 pass (`BRepMesh_*:OSD_Parallel*`) |
+| Count every failed thread when the thread pool reports out of memory | `TKernel/OSD/OSD_ThreadPool.cxx`, GTest `OSD_Parallel_Test.cxx` | Issue #5 review round 3; count mutation fails 1 new test, 61/61 pass (`BRepMesh_*:OSD_Parallel*`) |
+| Save the mesh before the BRepMesh run, apart from its restore | `TKMesh/BRepMesh/BRepMesh_{IncrementalMesh,FaceDiscret}.cxx`, GTest `BRepMesh_FailurePropagation_Test.cxx` | Issue #5 review round 3; new test fails on 4ec149b86 code, 61/61 pass (`BRepMesh_*:OSD_Parallel*`) |
 
 ## Shared instruction entry points
 
